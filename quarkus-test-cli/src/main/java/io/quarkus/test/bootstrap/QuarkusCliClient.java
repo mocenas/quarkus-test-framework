@@ -265,3 +265,5 @@ public class QuarkusCliClient {
         }
     }
 }
+
+// random line
