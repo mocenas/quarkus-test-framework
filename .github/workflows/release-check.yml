@@ -1,0 +1,14 @@
+name: "Release check"
+
+on:
+  pull_request:
+#    types: [opened]
+    paths:
+      - '.github/project.yml'
+jobs:
+  check-source-repo-is-not-a-fork:
+    #  if: github.event.pull_request.head.repo.name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Check if source repo is not a fork"
+        run: github.event.pull_request.head.repo.name == github.repository
