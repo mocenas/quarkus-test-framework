@@ -588,13 +588,13 @@
                             <arguments>-DskipTests=true</arguments>
                         </configuration>
                     </plugin>
-                    <plugin>
+                   <!-- <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
                         <version>3.2.7</version>
                         <configuration>
                             <gpgArguments>
-                                <arg>--pinentry-mode</arg>
+                                <arg>&#45;&#45;pinentry-mode</arg>
                                 <arg>loopback</arg>
                             </gpgArguments>
                         </configuration>
@@ -607,7 +607,7 @@
                                 </goals>
                             </execution>
                         </executions>
-                    </plugin>
+                    </plugin>-->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
