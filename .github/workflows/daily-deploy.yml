@@ -4,7 +4,6 @@ on:
   schedule:
     - cron: '0 23 * * *'
 
-
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -22,8 +21,8 @@ jobs:
           server-id: ossrh
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
-          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+#          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+#          gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Configure Git author
         run: |
@@ -32,10 +31,14 @@ jobs:
 
       - name: Maven release 999-SNAPSHOT
         run: |
-          git checkout -b release
-          mvn -B release:prepare -Prelease,framework,examples -DautoVersionSubmodules -DreleaseVersion=999-SNAPSHOT
-          mvn -B release:perform -DskipITs -Prelease,framework
+          mvn -B versions:set -DnewVersion=999-SNAPSHOT
+          mvn -B -DskipTests -DskipITs \
+            -DretryFailedDeploymentCount=3 \
+            -Prelease,framework \
+            clean deploy
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+#          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+
