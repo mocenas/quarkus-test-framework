@@ -4,16 +4,12 @@
     <parent>
         <groupId>io.quarkus.qe</groupId>
         <artifactId>quarkus-examples-parent</artifactId>
-        <version>1.4.1.Beta5-SNAPSHOT</version>
+        <version>1.6.0.Beta16-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
     <artifactId>examples-external-applications</artifactId>
     <name>Quarkus - Test Framework - Examples - External Applications</name>
     <dependencies>
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-resteasy</artifactId>
-        </dependency>
         <dependency>
             <groupId>io.quarkus.qe</groupId>
             <artifactId>quarkus-test-core</artifactId>
@@ -27,6 +23,11 @@
         <dependency>
             <groupId>io.quarkus.qe</groupId>
             <artifactId>quarkus-test-openshift</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus.qe</groupId>
+            <artifactId>quarkus-test-service-database</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

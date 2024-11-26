@@ -1,5 +1,7 @@
 package io.quarkus.test.services.containers;
 
+import java.io.File;
+
 import org.apache.commons.lang3.StringUtils;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
@@ -7,12 +9,13 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
 
 import io.quarkus.test.bootstrap.KafkaService;
+import io.quarkus.test.logging.Log;
 import io.quarkus.test.logging.TestContainersLoggingHandler;
 
 public abstract class BaseKafkaContainerManagedResource extends DockerContainerManagedResource {
 
-    private static final String SERVER_PROPERTIES = "server.properties";
-    private static final String EXPECTED_LOG = ".*started \\(kafka.server.KafkaServer\\).*";
+    private static final String SERVER_PROPERTIES = "kraft/server.properties";
+    private static final String EXPECTED_LOG = ".*started .*kafka.server.Kafka.*Server.*";
 
     protected final KafkaContainerManagedResourceBuilder model;
 
@@ -65,6 +68,10 @@ public abstract class BaseKafkaContainerManagedResource extends DockerContainerM
         return model.getVendor().getRegistry().getPort();
     }
 
+    protected String getResourceTargetName(String resource) {
+        return resource;
+    }
+
     @Override
     protected GenericContainer<?> initContainer() {
         GenericContainer<?> kafkaContainer = initKafkaContainer();
@@ -73,12 +80,21 @@ public abstract class BaseKafkaContainerManagedResource extends DockerContainerM
 
         String kafkaConfigPath = model.getKafkaConfigPath();
         if (StringUtils.isNotEmpty(getServerProperties())) {
+            Log.info("Copying file %s to %s ", getServerProperties(), kafkaConfigPath + SERVER_PROPERTIES);
             kafkaContainer.withCopyFileToContainer(MountableFile.forClasspathResource(getServerProperties()),
                     kafkaConfigPath + SERVER_PROPERTIES);
         }
 
         for (String resource : getKafkaConfigResources()) {
-            kafkaContainer.withCopyFileToContainer(MountableFile.forClasspathResource(resource), kafkaConfigPath + resource);
+            if (resource.contains(File.separator)) {
+                // file in the target directory
+                String fileName = resource.substring(resource.lastIndexOf(File.separator) + 1);
+                kafkaContainer.withCopyFileToContainer(MountableFile.forHostPath(resource), kafkaConfigPath + fileName);
+            } else {
+                // resource
+                kafkaContainer.withCopyFileToContainer(MountableFile.forClasspathResource(resource),
+                        kafkaConfigPath + getResourceTargetName(resource));
+            }
         }
 
         if (model.isWithRegistry()) {
@@ -136,7 +152,7 @@ public abstract class BaseKafkaContainerManagedResource extends DockerContainerM
 
     private String getSchemaRegistryUrl() {
         String path = StringUtils.defaultIfBlank(model.getRegistryPath(), model.getVendor().getRegistry().getPath());
-        String containerIp = schemaRegistry.getContainerIpAddress();
+        String containerIp = schemaRegistry.getHost();
         return String.format("http://%s:%s%s", containerIp, schemaRegistry.getMappedPort(getKafkaRegistryPort()), path);
     }
 

@@ -25,7 +25,7 @@ jobs:
           cache: 'maven'
       - name: Build Quarkus main
         run: |
-          git clone https://github.com/quarkusio/quarkus.git && cd quarkus && ./mvnw -B -s .github/mvn-settings.xml clean install -Dquickly -Dno-test-modules -Prelocations
+          git clone https://github.com/quarkusio/quarkus.git && cd quarkus && ./mvnw -B --no-transfer-progress -s .github/mvn-settings.xml clean install -Dquickly -Dno-test-modules -Prelocations
       - name: Tar Maven Repo
         shell: bash
         run: tar -I 'pigz -9' -cf maven-repo.tgz -C ~ .m2/repository
@@ -53,25 +53,13 @@ jobs:
           java-version: ${{ matrix.java }}
           check-latest: true
           cache: 'maven'
-      - name: Install Helm client
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.9.0
-        id: install-helm
-      - name: Setup helmfile
-        uses: mamezou-tech/setup-helmfile@v1.3.0
-        with:
-          helmfile-version: "v0.145.2"
-          install-helm: no
       - name: Build
         run: |
-          MAVEN_PROFILES="-Pframework,examples"
-
           if [[ "${{ matrix.quarkus-version }}" != current ]]; then
              QUARKUS_VERSION="-Dquarkus.platform.version=${{ matrix.quarkus-version }}"
           fi
 
-          mvn -B -fae -s .github/mvn-settings.xml clean install  -Dvalidate-format $QUARKUS_VERSION $EXCLUDE_MODULES
+          mvn -B --no-transfer-progress -fae -s .github/mvn-settings.xml clean install -Dvalidate-format $QUARKUS_VERSION -Pframework,examples
       - name: Zip Artifacts
         if: failure()
         run: |
@@ -102,38 +90,17 @@ jobs:
           check-latest: true
           cache: 'maven'
         id: install-jdk
-      - name: Install Helm client
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.9.0
-        id: install-helm
-      - name: Setup helmfile
-        uses: mamezou-tech/setup-helmfile@v1.3.0
-        with:
-          helmfile-version: "v0.145.2"
-          install-helm: no
       - name: Download Maven Repo
         uses: actions/download-artifact@v4
         with:
-          name: maven-repo-linux-build-jvm
+          name: maven-repo
           path: .
       - name: Extract Maven Repo
         shell: bash
         run: tar -xzf maven-repo.tgz -C ~
-#      - uses: engineerd/setup-kind@v0.5.0
-#        with:
-#          version: "v0.11.1"
-#      - name: Configure Load Balancer
-#        run: .github/configure-load-balancer.sh kind
-#      - name: Login to Docker Registry
-#        uses: docker/login-action@v1
-#        with:
-#          registry: ${{ secrets.CI_REGISTRY }}
-#          username: ${{ secrets.CI_REGISTRY_USERNAME }}
-#          password: ${{ secrets.CI_REGISTRY_PASSWORD }}
       - name: Build Quarkus CLI
         run: |
-          git clone https://github.com/quarkusio/quarkus.git && cd quarkus/devtools/cli && mvn -B -s ../../../.github/mvn-settings.xml clean install -Dquickly -Dno-test-modules -Prelocations
+          git clone https://github.com/quarkusio/quarkus.git && cd quarkus/devtools/cli && mvn -B --no-transfer-progress -s ../../../.github/mvn-settings.xml clean install -Dquickly -Dno-test-modules -Prelocations
       - name: Install Quarkus CLI
         run: |
           cat <<EOF > ./quarkus-dev-cli
@@ -144,7 +111,7 @@ jobs:
           ./quarkus-dev-cli version
       - name: Build
         run: |
-          mvn -B -fae -s .github/mvn-settings.xml clean install -Pframework,examples,extensions,coverage -Dvalidate-format -Drun-cli-tests -Dts.container.registry-url=${{ secrets.CI_REGISTRY }} -Dts.quarkus.cli.cmd="${PWD}/quarkus-dev-cli" -Dquarkus.platform.version="${{ matrix.quarkus-version }}"
+          mvn -B --no-transfer-progress -fae -s .github/mvn-settings.xml clean install -Pframework,examples,coverage -Dvalidate-format -Drun-cli-tests -Dts.quarkus.cli.cmd="${PWD}/quarkus-dev-cli" -Dquarkus.platform.version="${{ matrix.quarkus-version }}"
       - name: Generate Jacoco Report
         run: |
           cd coverage-report
@@ -212,20 +179,10 @@ jobs:
           java-version: ${{ matrix.java }}
           check-latest: true
           cache: 'maven'
-      - name: Install Helm client
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.9.0
-        id: install-helm
-      - name: Setup helmfile
-        uses: mamezou-tech/setup-helmfile@v1.3.0
-        with:
-          helmfile-version: "v0.145.2"
-          install-helm: no
       - name: Download Maven Repo
         uses: actions/download-artifact@v4
         with:
-          name: maven-repo-linux-build-native
+          name: maven-repo
           path: .
       - name: Extract Maven Repo
         shell: bash
@@ -236,7 +193,7 @@ jobs:
              QUARKUS_VERSION="-Dquarkus.platform.version=${{ matrix.quarkus-version }}"
           fi
 
-          mvn -B -fae -s .github/mvn-settings.xml clean install -Pframework,examples,native $QUARKUS_VERSION $EXCLUDE_MODULES
+          mvn -B --no-transfer-progress -fae -s .github/mvn-settings.xml clean install -Pframework,examples,native $QUARKUS_VERSION
       - name: Zip Artifacts
         if: failure()
         run: |
@@ -247,6 +204,110 @@ jobs:
         with:
           name: artifacts-native-${{ matrix.quarkus-version }}-${{ matrix.java }}
           path: artifacts-native-${{ matrix.quarkus-version }}-${{ matrix.java }}.zip
+  kubernetes-build-jvm-latest:
+    name: Daily - Kubernetes - JVM - Latest version
+    runs-on: ubuntu-latest
+    needs: quarkus-main-build
+    strategy:
+      matrix:
+        quarkus-version: ["999-SNAPSHOT"]
+        java: [ 17 ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reclaim Disk Space
+        run: .github/ci-prerequisites.sh
+      - name: Install JDK {{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+          check-latest: true
+          cache: 'maven'
+      - name: Download Maven Repo
+        uses: actions/download-artifact@v4
+        with:
+          name: maven-repo
+          path: .
+      - name: Extract Maven Repo
+        shell: bash
+        run: tar -xzf maven-repo.tgz -C ~
+      - name: Set up Minikube-Kubernetes
+        uses: manusa/actions-setup-minikube@v2.13.0
+        with:
+          minikube version: 'v1.33.1'
+          kubernetes version: 'v1.30.0'
+          github token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.CI_REGISTRY_USERNAME }}
+          password: ${{ secrets.CI_REGISTRY_PASSWORD }}
+      - name: Build
+        run: |
+          mvn -B --no-transfer-progress -fae -s .github/mvn-settings.xml clean install -Pframework,examples,kubernetes -Dquarkus.platform.version="${{ matrix.quarkus-version }}" -Dts.container.registry-url=${{ secrets.CI_REGISTRY }}
+      - name: Zip Artifacts
+        if: failure()
+        run: |
+          zip -R artifacts-k8s-jvm-${{ matrix.quarkus-version }}-${{ matrix.java }}.zip '*-reports/*'
+      - name: Archive artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-k8s-jvm-${{ matrix.quarkus-version }}-${{ matrix.java }}
+          path: artifacts-k8s-jvm-${{ matrix.quarkus-version }}-${{ matrix.java }}.zip
+  kubernetes-build-native-latest:
+    name: Daily - Kubernetes - Native build - Latest version
+    runs-on: ubuntu-latest
+    needs: quarkus-main-build
+    strategy:
+      matrix:
+        quarkus-version: ["999-SNAPSHOT"]
+        java: [ 21 ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reclaim Disk Space
+        run: .github/ci-prerequisites.sh
+      - name: Install JDK {{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+          check-latest: true
+          cache: 'maven'
+      - name: Download Maven Repo
+        uses: actions/download-artifact@v4
+        with:
+          name: maven-repo
+          path: .
+      - name: Extract Maven Repo
+        shell: bash
+        run: tar -xzf maven-repo.tgz -C ~
+      - name: Set up Minikube-Kubernetes
+        uses: manusa/actions-setup-minikube@v2.13.0
+        with:
+          minikube version: 'v1.33.1'
+          kubernetes version: 'v1.30.0'
+          github token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.CI_REGISTRY_USERNAME }}
+          password: ${{ secrets.CI_REGISTRY_PASSWORD }}
+      - name: Build
+        run: |
+          mvn -B --no-transfer-progress -fae -s .github/mvn-settings.xml clean install -Pframework,examples,native,kubernetes -Dquarkus.platform.version="${{ matrix.quarkus-version }}" -Dts.container.registry-url=${{ secrets.CI_REGISTRY }}
+      - name: Zip Artifacts
+        if: failure()
+        run: |
+          zip -R artifacts-k8s-native-${{ matrix.quarkus-version }}-${{ matrix.java }}.zip '*-reports/*'
+      - name: Archive artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-k8s-native-${{ matrix.quarkus-version }}-${{ matrix.java }}
+          path: artifacts-k8s-native-${{ matrix.quarkus-version }}-${{ matrix.java }}.zip
   windows-build-jvm-latest:
     name: Daily - Windows - JVM build - Latest Version
     runs-on: windows-latest
@@ -264,21 +325,10 @@ jobs:
           java-version: ${{ matrix.java }}
           check-latest: true
           cache: 'maven'
-      - name: Install Helm client
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.9.0
-        id: install-helm
-      - uses: MinoruSekine/setup-scoop@main
-        with:
-          add_extras_bucket: 'true'
-      - name: Install helmfile through windows scoop
-        shell: bash
-        run: scoop install helmfile
       - name: Download Maven Repo
         uses: actions/download-artifact@v4
         with:
-          name: maven-repo-windows-build-jvm
+          name: maven-repo
           path: .
       - name: Extract Maven Repo
         shell: bash
@@ -286,7 +336,7 @@ jobs:
       - name: Build in JVM mode
         shell: bash
         run: |
-          mvn -B -fae -s .github/mvn-settings.xml clean install -Pframework,examples -Dquarkus.platform.version="${{ matrix.quarkus-version }}"
+          mvn -B --no-transfer-progress -fae -s .github/mvn-settings.xml clean install -Pframework,examples -Dquarkus.platform.version="${{ matrix.quarkus-version }}"
       - name: Zip Artifacts
         shell: bash
         if: failure()
@@ -318,17 +368,6 @@ jobs:
           java-version: ${{ matrix.java }}
           check-latest: true
           cache: 'maven'
-      - name: Install Helm client
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.9.0
-        id: install-helm
-      - uses: MinoruSekine/setup-scoop@main
-        with:
-          add_extras_bucket: 'true'
-      - name: Install helmfile through windows scoop
-        shell: bash
-        run: scoop install helmfile
       - name: Download Sysinternals Handle program used for native race debugging
         shell: pwsh
         run: Invoke-WebRequest https://download.sysinternals.com/files/Handle.zip -OutFile .\handle.zip
@@ -338,14 +377,14 @@ jobs:
       - name: Download Maven Repo
         uses: actions/download-artifact@v4
         with:
-          name: maven-repo-windows-build-native
+          name: maven-repo
           path: .
       - name: Extract Maven Repo
         shell: bash
         run: tar -xzf maven-repo.tgz -C ~
       - name: Install cl.exe
         uses: ilammy/msvc-dev-cmd@v1
-      - uses: microsoft/setup-msbuild@v1
+      - uses: microsoft/setup-msbuild@v2
       - name: Setup GraalVM
         id: setup-graalvm
         uses: graalvm/setup-graalvm@v1
@@ -356,11 +395,11 @@ jobs:
       - name: Configure Pagefile
         # Increased the page-file size due to memory-consumption of native-image command
         # For details see https://github.com/actions/virtual-environments/issues/785
-        uses: al-cheb/configure-pagefile-action@v1.3
+        uses: al-cheb/configure-pagefile-action@v1.4
       - name: Build in Native mode
         shell: bash
         run: |
-          mvn -B -fae -s .github/mvn-settings.xml clean install -Pframework,examples,native -Dquarkus.native.container-build=false -Dquarkus.platform.version="${{ matrix.quarkus-version }}" -Denable-win-race-debug=true
+          mvn -B --no-transfer-progress -fae -s .github/mvn-settings.xml clean install -Pframework,examples,native -Dquarkus.native.container-build=false -Dquarkus.platform.version="${{ matrix.quarkus-version }}"
       - name: Zip Artifacts
         shell: bash
         if: failure()
@@ -373,57 +412,3 @@ jobs:
         with:
           name: artifacts-latest-windows-native${{ matrix.java }}
           path: artifacts-latest-windows-native${{ matrix.java }}.tar
-#  kubernetes-build-native-latest:
-#    name: Daily - Kubernetes - Native build - Latest Version
-#    runs-on: ubuntu-latest
-#    needs: [ quarkus-main-build, linux-build-jvm-latest ]
-#    strategy:
-#      matrix:
-#        quarkus-version: ["999-SNAPSHOT"]
-#        java: [ 17 ]
-#    steps:
-#      - uses: actions/checkout@v4
-#      - name: Reclaim Disk Space
-#        run: .github/ci-prerequisites.sh
-#      - name: Install JDK {{ matrix.java }}
-#        uses: actions/setup-java@v4
-#        with:
-#          distribution: 'temurin'
-#          java-version: ${{ matrix.java }}
-#          check-latest: true
-#          cache: 'maven'
-#      - uses: engineerd/setup-kind@v0.5.0
-#        with:
-#          version: "v0.11.1"
-#      - name: Configure Load Balancer
-#        run: .github/configure-load-balancer.sh kind
-#      - name: Login to Docker Registry
-#        uses: docker/login-action@v1
-#        with:
-#          registry: ${{ secrets.CI_REGISTRY }}
-#          username: ${{ secrets.CI_REGISTRY_USERNAME }}
-#          password: ${{ secrets.CI_REGISTRY_PASSWORD }}
-#      - name: Download Maven Repo
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: maven-repo
-#          path: .
-#      - name: Extract Maven Repo
-#        shell: bash
-#        run: tar -xzf maven-repo.tgz -C ~
-#      - name: Build
-#        run: |
-#          if [[ "${{ matrix.quarkus-version }}" = 1.* ]]; then
-#             EXCLUDE_MODULES="-pl !examples/grpc"
-#          fi
-#          mvn -B -fae -s .github/mvn-settings.xml clean install -Pframework,examples,kubernetes,native -Dts.container.registry-url=${{ secrets.CI_REGISTRY }} -Dquarkus.platform.version="${{ matrix.quarkus-version }}" $EXCLUDE_MODULES
-#      - name: Zip Artifacts
-#        if: failure()
-#        run: |
-#          zip -R artifacts-k8s-native-${{ matrix.quarkus-version }}-${{ matrix.java }}.zip '*-reports/*'
-#      - name: Archive artifacts
-#        if: failure()
-#        uses: actions/upload-artifact@v4
-#        with:
-#          name: ci-artifacts
-#          path: artifacts-k8s-native-${{ matrix.quarkus-version }}-${{ matrix.java }}.zip

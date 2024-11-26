@@ -4,6 +4,7 @@ import java.lang.annotation.Annotation;
 import java.util.Optional;
 import java.util.ServiceLoader;
 
+import io.quarkus.test.bootstrap.LocalhostManagedResource;
 import io.quarkus.test.bootstrap.ManagedResource;
 import io.quarkus.test.bootstrap.ManagedResourceBuilder;
 import io.quarkus.test.bootstrap.ServiceContext;
@@ -20,6 +21,7 @@ public class ContainerManagedResourceBuilder implements ManagedResourceBuilder {
     private String expectedLog;
     private String[] command;
     private Integer port;
+    private boolean portDockerHostToLocalhost;
 
     protected String getImage() {
         return image;
@@ -44,10 +46,16 @@ public class ContainerManagedResourceBuilder implements ManagedResourceBuilder {
     @Override
     public void init(Annotation annotation) {
         Container metadata = (Container) annotation;
-        this.image = PropertiesUtils.resolveProperty(metadata.image());
-        this.command = metadata.command();
-        this.expectedLog = PropertiesUtils.resolveProperty(metadata.expectedLog());
-        this.port = metadata.port();
+        init(metadata.image(), metadata.command(), metadata.expectedLog(), metadata.port(),
+                metadata.portDockerHostToLocalhost());
+    }
+
+    protected void init(String image, String[] command, String expectedLog, int port, boolean portDockerHostToLocalhost) {
+        this.image = PropertiesUtils.resolveProperty(image);
+        this.command = command;
+        this.expectedLog = PropertiesUtils.resolveProperty(expectedLog);
+        this.port = port;
+        this.portDockerHostToLocalhost = portDockerHostToLocalhost;
     }
 
     @Override
@@ -55,10 +63,16 @@ public class ContainerManagedResourceBuilder implements ManagedResourceBuilder {
         this.context = context;
         for (ContainerManagedResourceBinding binding : managedResourceBindingsRegistry) {
             if (binding.appliesFor(context)) {
+                if (portDockerHostToLocalhost) {
+                    return new LocalhostManagedResource(binding.init(this));
+                }
                 return binding.init(this);
             }
         }
 
+        if (portDockerHostToLocalhost) {
+            return new LocalhostManagedResource(new GenericDockerContainerManagedResource(this));
+        }
         return new GenericDockerContainerManagedResource(this);
     }
 }

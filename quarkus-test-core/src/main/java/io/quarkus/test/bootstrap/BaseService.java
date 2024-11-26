@@ -1,7 +1,11 @@
 package io.quarkus.test.bootstrap;
 
+import static io.quarkus.runtime.util.StringUtil.hyphenate;
 import static io.quarkus.test.utils.AwaitilityUtils.AwaitilitySettings;
 import static io.quarkus.test.utils.AwaitilityUtils.untilIsTrue;
+import static io.quarkus.test.utils.TestExecutionProperties.isThisCliApp;
+import static io.quarkus.test.utils.TestExecutionProperties.isThisStartedCliApp;
+import static io.quarkus.test.utils.TestExecutionProperties.rememberThisAppStarted;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.nio.file.Path;
@@ -13,6 +17,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -24,6 +29,7 @@ import io.quarkus.test.services.URILike;
 import io.quarkus.test.utils.FileUtils;
 import io.quarkus.test.utils.LogsVerifier;
 import io.quarkus.test.utils.PropertiesUtils;
+import io.quarkus.test.utils.TestExecutionProperties;
 
 public class BaseService<T extends Service> implements Service {
 
@@ -37,6 +43,7 @@ public class BaseService<T extends Service> implements Service {
     protected ServiceContext context;
     private final ServiceLoader<ServiceListener> listeners = ServiceLoader.load(ServiceListener.class);
     private final List<Action> onPreStartActions = new LinkedList<>();
+    private final List<Action> onPreStopActions = new LinkedList<>();
     private final List<Action> onPostStartActions = new LinkedList<>();
     private final Map<String, String> properties = new HashMap<>();
     private final List<Runnable> futureProperties = new LinkedList<>();
@@ -77,6 +84,11 @@ public class BaseService<T extends Service> implements Service {
         return (T) this;
     }
 
+    public T onPreStop(Action action) {
+        onPreStopActions.add(action);
+        return (T) this;
+    }
+
     public T onPostStart(Action action) {
         onPostStartActions.add(action);
         return (T) this;
@@ -100,6 +112,17 @@ public class BaseService<T extends Service> implements Service {
     /**
      * The runtime configuration property to be used if the built artifact is
      * configured to be run.
+     *
+     * NOTE: unlike other {@link this::withProperties}, here we add new properties and keep the old ones
+     */
+    public T withProperties(Supplier<Map<String, String>> newProperties) {
+        futureProperties.add(() -> properties.putAll(newProperties.get()));
+        return (T) this;
+    }
+
+    /**
+     * The runtime configuration property to be used if the built artifact is
+     * configured to be run.
      */
     @Override
     public T withProperty(String key, String value) {
@@ -113,6 +136,14 @@ public class BaseService<T extends Service> implements Service {
      */
     public T withProperty(String key, Supplier<String> value) {
         futureProperties.add(() -> properties.put(key, value.get()));
+        return (T) this;
+    }
+
+    /**
+     * The runtime configuration property to be configured based on type variable {@code U} from context.
+     */
+    public <U> T withProperty(String configKey, String contextKey, Function<U, String> configValue) {
+        futureProperties.add(() -> properties.put(configKey, configValue.apply(getPropertyFromContext(contextKey))));
         return (T) this;
     }
 
@@ -193,6 +224,22 @@ public class BaseService<T extends Service> implements Service {
             return;
         }
 
+        // our FW tries to start each auto-started service twice
+        // I won't dare to change it until I have time to fix issues that I caused, but
+        // TODO: we should figure out why BaseService:start is called more than once
+        // once from the io.quarkus.test.bootstrap.QuarkusScenarioBootstrap.launchService
+        // and once from the io.quarkus.test.bootstrap.QuarkusScenarioBootstrap.beforeEach
+        // it doesn't matter for normal apps, but CLI app can launch and stop
+        // so it won't be running on the next "start()"
+        // so here, I am making sure that we remember the first start
+        if (isThisStartedCliApp(context)) {
+            return;
+        } else {
+            // we always need to remember this in case during the build we
+            // recognize this is a CLI app, which happens later
+            rememberThisAppStarted(context);
+        }
+
         Log.debug(this, "Starting service (%s)", getDisplayName());
         onPreStartActions.forEach(a -> a.handle(this));
         doStart();
@@ -212,6 +259,7 @@ public class BaseService<T extends Service> implements Service {
 
         Log.debug(this, "Stopping service (%s)", getDisplayName());
         listeners.forEach(ext -> ext.onServiceStopped(context));
+        onPreStopActions.forEach(a -> a.handle(this));
         managedResource.stop();
 
         Log.info(this, "Service stopped (%s)", getDisplayName());
@@ -236,12 +284,36 @@ public class BaseService<T extends Service> implements Service {
 
     @Override
     public ServiceContext register(String serviceName, ScenarioContext context) {
+        if (TestExecutionProperties.isOpenshiftPlatform() || TestExecutionProperties.isKubernetesPlatform()) {
+            // sanitize service name used in the Deployment
+            // name must fit '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')' regular expression
+            // we mostly want to sanitize field names (not explicitly declared service names)
+            // so Java enforces portion of the regular expression for us
+            return registerWithSanitizedServiceName(context, hyphenate(serviceName), serviceName);
+        }
+        return registerWithSanitizedServiceName(context, serviceName, serviceName);
+    }
+
+    private ServiceContext registerWithSanitizedServiceName(ScenarioContext context, String serviceName,
+            String originalServiceName) {
         this.serviceName = serviceName;
-        this.configuration = Configuration.load(serviceName);
-        this.context = new ServiceContext(this, context);
+        if (serviceName.equals(originalServiceName)) {
+            this.configuration = Configuration.load(serviceName);
+        } else {
+            this.configuration = Configuration.load(serviceName, originalServiceName);
+        }
+
+        this.context = createServiceContext(context);
+        onPreStart(s -> properties.putAll(this.context.getConfigPropertiesWithTestScope()));
+        onPreStop(s -> this.context.getConfigPropertiesWithTestScope().forEach((k, v) -> properties.remove(k)));
+
         onPreStart(s -> futureProperties.forEach(Runnable::run));
         context.getTestStore().put(serviceName, this);
         return this.context;
+    }
+
+    protected ServiceContext createServiceContext(ScenarioContext context) {
+        return new ServiceContext(this, context);
     }
 
     @Override
@@ -299,6 +371,9 @@ public class BaseService<T extends Service> implements Service {
     }
 
     private void waitUntilServiceIsStarted() {
+        if (isThisCliApp(this.context)) {
+            return;
+        }
         try {
             Duration startupCheckInterval = getConfiguration()
                     .getAsDuration(SERVICE_STARTUP_CHECK_POLL_INTERVAL, SERVICE_STARTUP_CHECK_POLL_INTERVAL_DEFAULT);

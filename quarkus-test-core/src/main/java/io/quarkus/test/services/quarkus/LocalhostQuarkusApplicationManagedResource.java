@@ -22,6 +22,7 @@ import io.quarkus.test.logging.FileServiceLoggingHandler;
 import io.quarkus.test.logging.Log;
 import io.quarkus.test.logging.LoggingHandler;
 import io.quarkus.test.services.URILike;
+import io.quarkus.test.services.quarkus.model.QuarkusProperties;
 import io.quarkus.test.utils.ProcessBuilderProvider;
 import io.quarkus.test.utils.ProcessUtils;
 import io.quarkus.test.utils.PropertiesUtils;
@@ -34,7 +35,7 @@ public abstract class LocalhostQuarkusApplicationManagedResource extends Quarkus
 
     private final QuarkusApplicationManagedResourceBuilder model;
 
-    private File logOutputFile;
+    private final File logOutputFile;
     private Process process;
     private LoggingHandler loggingHandler;
     private int assignedHttpPort;
@@ -93,17 +94,11 @@ public abstract class LocalhostQuarkusApplicationManagedResource extends Quarkus
         } else if (protocol == Protocol.GRPC && !model.isGrpcEnabled()) {
             fail("gRPC was not enabled. Use: `@QuarkusApplication(grpc = true)`");
         }
-        int port;
-        switch (protocol) {
-            case HTTPS:
-                port = assignedHttpsPort;
-                break;
-            case GRPC:
-                port = assignedGrpcPort;
-                break;
-            default:
-                port = assignedHttpPort;
-        }
+        int port = switch (protocol) {
+            case HTTPS -> assignedHttpsPort;
+            case GRPC -> assignedGrpcPort;
+            default -> assignedHttpPort;
+        };
         if (protocol == Protocol.MANAGEMENT && model.useSeparateManagementInterface()) {
             return createURI(model.useManagementSsl() ? "https" : "http",
                     "localhost",
@@ -120,7 +115,7 @@ public abstract class LocalhostQuarkusApplicationManagedResource extends Quarkus
     @Override
     public void restart() {
         stop();
-        if (model.containsBuildProperties()) {
+        if (model.buildPropertiesChanged()) {
             model.build();
         }
 
@@ -156,7 +151,11 @@ public abstract class LocalhostQuarkusApplicationManagedResource extends Quarkus
         }
 
         if (model.isGrpcEnabled()) {
-            assignedGrpcPort = getOrAssignPortByProperty(QUARKUS_GRPC_SERVER_PORT_PROPERTY);
+            if (QuarkusProperties.useSeparateGrpcServer(getContext())) {
+                assignedGrpcPort = getOrAssignPortByProperty(QUARKUS_GRPC_SERVER_PORT_PROPERTY);
+            } else {
+                assignedGrpcPort = assignedHttpPort;
+            }
         }
     }
 

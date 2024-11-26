@@ -12,8 +12,9 @@ import static io.quarkus.test.utils.PropertiesUtils.TARGET;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -24,6 +25,7 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -40,11 +42,13 @@ import io.fabric8.kubernetes.api.model.ServicePort;
 import io.fabric8.kubernetes.api.model.VolumeMount;
 import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
+import io.fabric8.kubernetes.client.Config;
+import io.fabric8.kubernetes.client.ConfigBuilder;
+import io.fabric8.kubernetes.client.KubernetesClientBuilder;
+import io.fabric8.kubernetes.client.dsl.NamespaceListVisitFromServerGetDeleteRecreateWaitApplicable;
+import io.fabric8.kubernetes.client.dsl.NonDeletingOperation;
+import io.fabric8.kubernetes.client.impl.KubernetesClientImpl;
 import io.fabric8.kubernetes.client.utils.Serialization;
-import io.fabric8.openshift.client.DefaultOpenShiftClient;
-import io.fabric8.openshift.client.NamespacedOpenShiftClient;
-import io.fabric8.openshift.client.OpenShiftConfig;
-import io.fabric8.openshift.client.OpenShiftConfigBuilder;
 import io.quarkus.test.bootstrap.Service;
 import io.quarkus.test.configuration.PropertyLookup;
 import io.quarkus.test.logging.Log;
@@ -58,27 +62,35 @@ public final class KubectlClient {
     public static final String LABEL_SCENARIO_ID = "scenarioId";
     public static final PropertyLookup ENABLED_EPHEMERAL_NAMESPACES = new PropertyLookup(
             "ts.kubernetes.ephemeral.namespaces.enabled", Boolean.TRUE.toString());
-
     private static final String RESOURCE_MNT_FOLDER = "/resource";
     private static final int NAMESPACE_NAME_SIZE = 10;
     private static final int NAMESPACE_CREATION_RETRIES = 5;
 
+    private static final int DEPLOYMENT_CREATION_TIMEOUT = 30;
+
     private static final String KUBECTL = "kubectl";
     private static final int HTTP_PORT_DEFAULT = 80;
-
     private final String currentNamespace;
-    private final DefaultOpenShiftClient masterClient;
-    private final NamespacedOpenShiftClient client;
+    private final KubernetesClientImpl client;
     private final String scenarioId;
 
     private KubectlClient(String scenarioUniqueName) {
         this.scenarioId = scenarioUniqueName;
-        String activeNamespace = new DefaultOpenShiftClient().getNamespace();
-        currentNamespace = ENABLED_EPHEMERAL_NAMESPACES.getAsBoolean() ? createNamespace() : activeNamespace;
-        OpenShiftConfig config = new OpenShiftConfigBuilder().withTrustCerts(true).withNamespace(currentNamespace).build();
-        masterClient = new DefaultOpenShiftClient(config);
-        client = masterClient.inNamespace(currentNamespace);
+        if (ENABLED_EPHEMERAL_NAMESPACES.getAsBoolean()) {
+            currentNamespace = createNamespace();
+            Config config = new ConfigBuilder().withTrustCerts(true).withNamespace(currentNamespace).build();
+            client = createClient(config);
+        } else {
+            Config config = new ConfigBuilder().withTrustCerts(true).build();
+            client = createClient(config);
+            currentNamespace = client.getNamespace();
+        }
         setCurrentSessionNamespace(currentNamespace);
+    }
+
+    private static KubernetesClientImpl createClient(Config config) {
+        return new KubernetesClientBuilder().withConfig(config).build()
+                .adapt(KubernetesClientImpl.class);
     }
 
     public static KubectlClient create(String scenarioName) {
@@ -102,7 +114,7 @@ public final class KubectlClient {
             new Command(KUBECTL, "apply", "-f", file.toAbsolutePath().toString(), "-n", currentNamespace)
                     .runAndWait();
         } catch (Exception e) {
-            fail("Failed to apply resource " + file.toAbsolutePath().toString() + " for " + service.getName() + ". Caused by "
+            fail("Failed to apply resource " + file.toAbsolutePath() + " for " + service.getName() + ". Caused by "
                     + e.getMessage());
         }
     }
@@ -117,11 +129,11 @@ public final class KubectlClient {
         Map<String, String> enrichProperties = enrichProperties(service.getProperties(), deployment);
 
         deployment.getSpec().getTemplate().getSpec().getContainers().forEach(container -> {
-            enrichProperties.entrySet().forEach(
-                    envVar -> container.getEnv().add(new EnvVar(envVar.getKey(), envVar.getValue(), null)));
+            enrichProperties.forEach((key, value) -> container.getEnv().add(new EnvVar(key, value, null)));
         });
 
-        client.apps().deployments().createOrReplace(deployment);
+        client.apps().deployments().withTimeout(DEPLOYMENT_CREATION_TIMEOUT, TimeUnit.SECONDS).delete();
+        client.apps().deployments().resource(deployment).create();
     }
 
     /**
@@ -152,7 +164,7 @@ public final class KubectlClient {
     public void expose(Service service, Integer port) {
         try {
             new Command(KUBECTL, "expose", "deployment", service.getName(), "--port=" + port, "--name=" + service.getName(),
-                    "--type=LoadBalancer", "-n", currentNamespace).runAndWait();
+                    "--type=NodePort", "-n", currentNamespace).runAndWait();
         } catch (Exception e) {
             fail("Service failed to be exposed. Caused by " + e.getMessage());
         }
@@ -214,36 +226,16 @@ public final class KubectlClient {
     }
 
     /**
-     * Resolve the url by the service.
-     *
-     * @param service
-     * @return
+     * Get node host IP.
      */
-    public String host(Service service) {
-        String serviceName = service.getName();
-        io.fabric8.kubernetes.api.model.Service serviceModel = client.services().withName(serviceName).get();
-        if (serviceModel == null
-                || serviceModel.getStatus() == null
-                || serviceModel.getStatus().getLoadBalancer() == null
-                || serviceModel.getStatus().getLoadBalancer().getIngress() == null) {
-            printServiceInfo(service);
-            fail("Service " + serviceName + " not found");
+    public String host() {
+        String nodeURL = client.network().getConfiguration().getMasterUrl();
+        try {
+            URI uri = new URI(nodeURL);
+            return uri.getHost();
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(e);
         }
-
-        // IP detection rules:
-        // 1.- Try Ingress IP
-        // 2.- Try Ingress Hostname
-        Optional<String> ip = serviceModel.getStatus().getLoadBalancer().getIngress().stream()
-                .map(ingress -> StringUtils.defaultIfBlank(ingress.getIp(), ingress.getHostname()))
-                .filter(StringUtils::isNotEmpty)
-                .findFirst();
-
-        if (ip.isEmpty()) {
-            printServiceInfo(service);
-            fail("Service " + serviceName + " host not found");
-        }
-
-        return ip.get();
     }
 
     /**
@@ -260,7 +252,7 @@ public final class KubectlClient {
         }
 
         return serviceModel.getSpec().getPorts().stream()
-                .map(ServicePort::getPort)
+                .map(ServicePort::getNodePort)
                 .filter(Objects::nonNull)
                 .findFirst()
                 .orElse(HTTP_PORT_DEFAULT);
@@ -276,10 +268,10 @@ public final class KubectlClient {
             } catch (Exception e) {
                 fail("Project failed to be deleted. Caused by " + e.getMessage());
             } finally {
-                masterClient.close();
+                client.close();
             }
         } else {
-            deleteResourcesByLabel(LABEL_SCENARIO_ID, getScenarioId());
+            deleteResources(getScenarioId());
         }
     }
 
@@ -290,14 +282,14 @@ public final class KubectlClient {
     /**
      * Delete test resources.
      */
-    private void deleteResourcesByLabel(String labelName, String labelValue) {
+    private void deleteResources(String labelValue) {
         try {
-            String label = String.format("%s=%s", labelName, labelValue);
+            String label = String.format("%s=%s", KubectlClient.LABEL_SCENARIO_ID, labelValue);
             new Command(KUBECTL, "delete", "-n", currentNamespace, "all", "-l", label).runAndWait();
         } catch (Exception e) {
             fail("Project failed to be deleted. Caused by " + e.getMessage());
         } finally {
-            masterClient.close();
+            client.close();
         }
     }
 
@@ -306,13 +298,14 @@ public final class KubectlClient {
     }
 
     private List<HasMetadata> loadYaml(String template) {
-        return client.load(new ByteArrayInputStream(template.getBytes())).get();
+        NamespaceListVisitFromServerGetDeleteRecreateWaitApplicable<HasMetadata> load = client
+                .load(new ByteArrayInputStream(template.getBytes()));
+        return load.items();
     }
 
     private String enrichTemplate(Service service, String template, Map<String, String> extraTemplateProperties) {
-        List<HasMetadata> objs = loadYaml(template);
-        for (HasMetadata obj : objs) {
-            // set namespace
+        List<HasMetadata> objects = loadYaml(template);
+        for (HasMetadata obj : objects) {
             obj.getMetadata().setNamespace(namespace());
             Map<String, String> objMetadataLabels = Optional.ofNullable(obj.getMetadata().getLabels())
                     .orElse(new HashMap<>());
@@ -320,47 +313,37 @@ public final class KubectlClient {
             objMetadataLabels.put(LABEL_SCENARIO_ID, getScenarioId());
             obj.getMetadata().setLabels(objMetadataLabels);
 
-            if (obj instanceof Deployment) {
-                Deployment d = (Deployment) obj;
+            if (obj instanceof Deployment deployment) {
 
                 // set deployment name
-                d.getMetadata().setName(service.getName());
+                deployment.getMetadata().setName(service.getName());
 
                 // set metadata to template
-                d.getSpec().getTemplate().getMetadata().setNamespace(namespace());
+                deployment.getSpec().getTemplate().getMetadata().setNamespace(namespace());
 
                 // add label for logs
-                Map<String, String> templateMetadataLabels = d.getSpec().getTemplate().getMetadata().getLabels();
+                Map<String, String> templateMetadataLabels = deployment.getSpec().getTemplate().getMetadata().getLabels();
                 templateMetadataLabels.put(LABEL_TO_WATCH_FOR_LOGS, service.getName());
                 templateMetadataLabels.put(LABEL_SCENARIO_ID, getScenarioId());
 
                 // add env var properties
-                Map<String, String> enrichProperties = enrichProperties(service.getProperties(), d);
+                Map<String, String> enrichProperties = enrichProperties(service.getProperties(), deployment);
                 enrichProperties.putAll(extraTemplateProperties);
-                d.getSpec().getTemplate().getSpec().getContainers()
-                        .forEach(container -> enrichProperties.entrySet().forEach(property -> {
-                            String key = property.getKey();
+                deployment.getSpec().getTemplate().getSpec().getContainers()
+                        .forEach(container -> enrichProperties.forEach((key, value) -> {
                             EnvVar envVar = getEnvVarByKey(key, container);
                             if (envVar == null) {
-                                container.getEnv().add(new EnvVar(key, property.getValue(), null));
+                                container.getEnv().add(new EnvVar(key, value, null));
                             } else {
-                                envVar.setValue(property.getValue());
+                                envVar.setValue(value);
                             }
                         }));
             }
         }
 
         KubernetesList list = new KubernetesList();
-        list.setItems(objs);
-        try {
-            ByteArrayOutputStream os = new ByteArrayOutputStream();
-            Serialization.yamlMapper().writeValue(os, list);
-            template = new String(os.toByteArray());
-        } catch (IOException e) {
-            fail("Failed adding properties into template. Caused by " + e.getMessage());
-        }
-
-        return template;
+        list.setItems(objects);
+        return Serialization.asYaml(list);
     }
 
     private EnvVar getEnvVarByKey(String key, Container container) {
@@ -461,10 +444,10 @@ public final class KubectlClient {
                     });
         } else {
             // create new one
-            client.configMaps().createOrReplace(new ConfigMapBuilder()
+            client.configMaps().resource(new ConfigMapBuilder()
                     .withNewMetadata().withName(configMapName).endMetadata()
                     .addToData(key, value)
-                    .build());
+                    .build()).createOr(NonDeletingOperation::update);
         }
     }
 
@@ -577,26 +560,12 @@ public final class KubectlClient {
                 .toString();
     }
 
-    private boolean setCurrentSessionNamespace(String namespaceName) {
-        boolean done = false;
+    private void setCurrentSessionNamespace(String namespaceName) {
         try {
             new Command(KUBECTL, "config", "set-context", "--current", "--namespace=" + namespaceName).runAndWait();
-            done = true;
         } catch (Exception e) {
             Log.warn("Namespace " + namespaceName
                     + " failed to be set as current session namespace. Caused by: " + e.getMessage() + ". Trying again.");
         }
-
-        return done;
     }
-
-    private void printServiceInfo(Service service) {
-        try {
-            new Command(KUBECTL, "get", "svc", service.getName(), "-n", currentNamespace)
-                    .outputToConsole()
-                    .runAndWait();
-        } catch (Exception ignored) {
-        }
-    }
-
 }

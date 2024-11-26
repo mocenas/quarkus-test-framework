@@ -4,9 +4,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.stream.Collectors;
-
-import org.apache.commons.io.FileUtils;
 
 public final class SureFireCommunicationHelper {
 
@@ -25,12 +22,7 @@ public final class SureFireCommunicationHelper {
     }
 
     void closeCommunication() {
-        try {
-            // recursively delete directory with all its content
-            FileUtils.deleteDirectory(exitTmpDir.toFile());
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to delete exit directory", e);
-        }
+        deleteDirectory(exitTmpDir);
     }
 
     void sendExitSignal() {
@@ -63,7 +55,7 @@ public final class SureFireCommunicationHelper {
             var exitTmpDirs = tmpFiles
                     .filter(Files::isDirectory)
                     .filter(SureFireCommunicationHelper::isExitTmpDir)
-                    .collect(Collectors.toList());
+                    .toList();
             if (exitTmpDirs.isEmpty()) {
                 throw new IllegalStateException("Exit directory is missing");
             }
@@ -95,14 +87,7 @@ public final class SureFireCommunicationHelper {
             tmpFiles
                     .filter(Files::isDirectory)
                     .filter(SureFireCommunicationHelper::isExitTmpDir)
-                    .forEach(path -> {
-                        try {
-                            // recursively delete directory with all its content
-                            FileUtils.deleteDirectory(path.toFile());
-                        } catch (IOException e) {
-                            throw new IllegalStateException("Failed to delete previous exit directory", e);
-                        }
-                    });
+                    .forEach(SureFireCommunicationHelper::deleteDirectory);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to delete previous exit directories", e);
         }
@@ -110,5 +95,32 @@ public final class SureFireCommunicationHelper {
 
     private static Path tmpDirPath() {
         return Path.of(System.getProperty("java.io.tmpdir"));
+    }
+
+    /**
+     * Recursively deletes directory with all its content.
+     */
+    private static void deleteDirectory(Path directoryPath) {
+        if (Files.exists(directoryPath)) {
+            var dirFiles = directoryPath.toFile().listFiles();
+            if (dirFiles != null) {
+                for (File dirFile : dirFiles) {
+                    if (dirFile.isDirectory()) {
+                        deleteDirectory(dirFile.toPath());
+                    } else {
+                        deletePath(dirFile.toPath());
+                    }
+                }
+            }
+            deletePath(directoryPath);
+        }
+    }
+
+    private static void deletePath(Path path) {
+        try {
+            Files.delete(path);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to delete: " + path, e);
+        }
     }
 }

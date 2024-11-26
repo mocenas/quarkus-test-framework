@@ -4,6 +4,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.hamcrest.Matcher;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.scenarios.OpenShiftDeploymentStrategy;
@@ -21,7 +22,7 @@ public class OpenShiftUsingExtensionAndServerlessFunqyKnEventsIT {
             "Start::defaultChain::configChain::annotatedChain::lastChainLink");
 
     @QuarkusApplication
-    static FunqyKnativeEventsService service = new OpenShiftExtensionFunqyKnativeEventsService()
+    static final FunqyKnativeEventsService service = new OpenShiftExtensionFunqyKnativeEventsService()
             .withDefaultBroker()
             .withTrigger().name("annotatedchain").defaultBroker().filterCloudEventType("annotated").endTrigger()
             .withTrigger().name("configChain").defaultBroker().filterCloudEventType("defaultChain.output").endTrigger()
@@ -29,6 +30,7 @@ public class OpenShiftUsingExtensionAndServerlessFunqyKnEventsIT {
             .withTrigger().name("lastchainlink").defaultBroker().filterCloudEventType("lastChainLink").endTrigger();
 
     @Test
+    @Disabled("https://github.com/quarkusio/quarkus/issues/40676")
     public void simpleFunctionChainCloudEventGetTest() {
         final String actualResponse = service
                 .<String> funcInvoker()

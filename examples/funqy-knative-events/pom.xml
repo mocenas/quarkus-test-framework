@@ -4,12 +4,16 @@
     <parent>
         <groupId>io.quarkus.qe</groupId>
         <artifactId>quarkus-examples-parent</artifactId>
-        <version>1.4.1.Beta5-SNAPSHOT</version>
+        <version>1.6.0.Beta16-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
     <artifactId>examples-funqy-knative-events</artifactId>
     <packaging>jar</packaging>
     <name>Quarkus - Test Framework - Examples - Funqy - Knative Events</name>
+    <properties>
+        <!-- Skip Quarkus build as this module have only Openshift tests and app have fixed build time properties -->
+        <quarkus.build.skip>true</quarkus.build.skip>
+    </properties>
     <dependencies>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -21,7 +25,7 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-rest-client-reactive-jackson</artifactId>
+            <artifactId>quarkus-rest-client-jackson</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus.qe</groupId>

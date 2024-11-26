@@ -5,12 +5,13 @@ import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.bootstrap.DevModeQuarkusService;
 import io.quarkus.test.scenarios.QuarkusScenario;
+import io.quarkus.test.services.Certificate;
 import io.quarkus.test.services.DevModeQuarkusApplication;
 
 @QuarkusScenario
 public class DevModeGreetingResourceIT {
-    @DevModeQuarkusApplication(ssl = true)
-    static DevModeQuarkusService app = new DevModeQuarkusService();
+    @DevModeQuarkusApplication(ssl = true, certificates = @Certificate(configureKeystore = true, configureHttpServer = true, useTlsRegistry = false))
+    static final DevModeQuarkusService app = new DevModeQuarkusService();
 
     @Test
     public void shouldOpenDevUi() {

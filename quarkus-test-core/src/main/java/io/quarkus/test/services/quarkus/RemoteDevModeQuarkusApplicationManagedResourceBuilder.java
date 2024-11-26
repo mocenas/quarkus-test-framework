@@ -1,5 +1,6 @@
 package io.quarkus.test.services.quarkus;
 
+import static io.quarkus.test.services.quarkus.model.QuarkusProperties.createDisableBuildAnalyticsProperty;
 import static io.quarkus.test.utils.FileUtils.findTargetFile;
 import static io.quarkus.test.utils.MavenUtils.ENSURE_QUARKUS_BUILD;
 import static io.quarkus.test.utils.MavenUtils.SKIP_CHECKSTYLE;
@@ -50,6 +51,7 @@ public class RemoteDevModeQuarkusApplicationManagedResourceBuilder extends Artif
         RemoteDevModeQuarkusApplication metadata = (RemoteDevModeQuarkusApplication) annotation;
         liveReloadPassword = metadata.password();
         setPropertiesFile(metadata.properties());
+        initAppClasses(new Class<?>[0]);
     }
 
     @Override
@@ -65,8 +67,7 @@ public class RemoteDevModeQuarkusApplicationManagedResourceBuilder extends Artif
     @Override
     protected void build() {
         try {
-            FileUtils.copyCurrentDirectoryTo(getContext().getServiceFolder());
-            copyResourcesToAppFolder();
+            new QuarkusMavenPluginBuildHelper(this).prepareApplicationFolder();
 
             // Create mutable jar
             installParentPomsIfNeeded();
@@ -119,11 +120,13 @@ public class RemoteDevModeQuarkusApplicationManagedResourceBuilder extends Artif
 
         List<String> command = MavenUtils.mvnCommand(getContext());
         command.add(withProperty(QuarkusProperties.PACKAGE_TYPE_NAME, QuarkusProperties.MUTABLE_JAR));
-        command.add(SKIP_CHECKSTYLE);
         command.add(withProperty(QUARKUS_LIVE_RELOAD_PASSWORD, liveReloadPassword));
         command.add(withProperty(QUARKUS_LIVE_RELOAD_URL,
                 managedResource.getURI(Protocol.HTTP).toString()));
         command.add("quarkus:remote-dev");
+        if (QuarkusProperties.disableBuildAnalytics()) {
+            command.add(createDisableBuildAnalyticsProperty());
+        }
 
         Log.info("Running command: %s", String.join(" ", command));
 

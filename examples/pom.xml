@@ -4,7 +4,7 @@
     <parent>
         <groupId>io.quarkus.qe</groupId>
         <artifactId>quarkus-test-parent</artifactId>
-        <version>1.4.1.Beta5-SNAPSHOT</version>
+        <version>1.6.0.Beta16-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
     <artifactId>quarkus-examples-parent</artifactId>
@@ -12,8 +12,6 @@
     <packaging>pom</packaging>
     <modules>
         <module>quarkus-cli</module>
-        <!-- TODO: uncomment helm when we use version adapted to https://github.com/quarkusio/quarkus/pull/34956 -->
-        <!-- <module>quarkus-helm</module> -->
         <module>pingpong</module>
         <module>restclient</module>
         <module>greetings</module>
@@ -39,6 +37,23 @@
         <module>management</module>
         <module>debug</module>
     </modules>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>io.quarkus.qe</groupId>
+                <artifactId>quarkus-test-preparer</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-pom-mojo</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
     <profiles>
         <profile>
             <!-- makes it possible to start and keep alive app, containers, OCP namespace as long as you need -->

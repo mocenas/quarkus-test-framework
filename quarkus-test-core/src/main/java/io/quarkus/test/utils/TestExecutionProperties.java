@@ -1,14 +1,27 @@
 package io.quarkus.test.utils;
 
+import io.quarkus.test.bootstrap.Service;
+import io.quarkus.test.bootstrap.ServiceContext;
 import io.quarkus.test.configuration.PropertyLookup;
 import io.quarkus.test.services.quarkus.model.QuarkusProperties;
 
 public final class TestExecutionProperties {
 
+    /**
+     * Internal configuration property signalling that Management interface TLS support is enabled.
+     * This is just a way to propagate the information within framework, users don't need to be concern with it.
+     */
+    public static final String MANAGEMENT_INTERFACE_ENABLED = "ts-internal.management.interface";
     private static final String DEFAULT_SERVICE_NAME = "quarkus_test_framework";
     private static final String DEFAULT_BUILD_NUMBER = "777-default";
-
     private static final TestExecutionProperties INSTANCE = new TestExecutionProperties();
+    private static final String CLI_APP_PROPERTY_KEY = "ts-internal.is-cli-app";
+    private static final String APP_STARTED_KEY = "ts-internal.app-started";
+    /**
+     * You can enforce custom artifact build by setting this property for 'app' service with
+     * this 'ts.app.custom-build.required=true' or for all the services within a test class with 'ts.global.required=true'.
+     */
+    private static final PropertyLookup REQUIRE_CUSTOM_BUILD = new PropertyLookup("custom-build.required", "false");
 
     private final String serviceName;
     private final String buildNumber;
@@ -46,5 +59,29 @@ public final class TestExecutionProperties {
 
     public static String getBuildNumber() {
         return INSTANCE.buildNumber;
+    }
+
+    public static boolean useManagementSsl(Service service) {
+        return service.getProperty(MANAGEMENT_INTERFACE_ENABLED).map(Boolean::parseBoolean).orElse(false);
+    }
+
+    public static void rememberThisIsCliApp(ServiceContext context) {
+        context.put(CLI_APP_PROPERTY_KEY, Boolean.TRUE.toString());
+    }
+
+    public static boolean isThisCliApp(ServiceContext context) {
+        return Boolean.parseBoolean(context.get(CLI_APP_PROPERTY_KEY));
+    }
+
+    public static boolean isThisStartedCliApp(ServiceContext context) {
+        return isThisCliApp(context) && Boolean.parseBoolean(context.get(APP_STARTED_KEY));
+    }
+
+    public static void rememberThisAppStarted(ServiceContext context) {
+        context.put(APP_STARTED_KEY, Boolean.TRUE.toString());
+    }
+
+    public static boolean isCustomBuildRequired(ServiceContext context) {
+        return Boolean.parseBoolean(REQUIRE_CUSTOM_BUILD.get(context));
     }
 }

@@ -2,6 +2,12 @@ package io.quarkus.test.bootstrap.inject;
 
 import static io.quarkus.test.model.CustomVolume.VolumeType.CONFIG_MAP;
 import static io.quarkus.test.model.CustomVolume.VolumeType.SECRET;
+import static io.quarkus.test.openshift.utils.OpenShiftPropertiesUtils.getAnnotatedConfigMap;
+import static io.quarkus.test.openshift.utils.OpenShiftPropertiesUtils.getMountConfigMap;
+import static io.quarkus.test.openshift.utils.OpenShiftPropertiesUtils.getMountSecret;
+import static io.quarkus.test.openshift.utils.OpenShiftPropertiesUtils.isAnnotatedConfigMap;
+import static io.quarkus.test.openshift.utils.OpenShiftPropertiesUtils.isMountConfigMap;
+import static io.quarkus.test.openshift.utils.OpenShiftPropertiesUtils.isMountSecret;
 import static io.quarkus.test.utils.AwaitilityUtils.AwaitilitySettings;
 import static io.quarkus.test.utils.AwaitilityUtils.untilIsNotNull;
 import static io.quarkus.test.utils.AwaitilityUtils.untilIsTrue;
@@ -54,13 +60,14 @@ import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.VolumeBuilder;
 import io.fabric8.kubernetes.api.model.VolumeMount;
 import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
+import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.client.CustomResource;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
-import io.fabric8.kubernetes.client.dsl.ContainerResource;
 import io.fabric8.kubernetes.client.dsl.NamespaceListVisitFromServerGetDeleteRecreateWaitApplicable;
+import io.fabric8.kubernetes.client.dsl.NonDeletingOperation;
 import io.fabric8.kubernetes.client.dsl.PodResource;
+import io.fabric8.kubernetes.client.dsl.Resource;
 import io.fabric8.kubernetes.client.utils.Serialization;
-import io.fabric8.openshift.api.model.DeploymentConfig;
 import io.fabric8.openshift.api.model.ImageStream;
 import io.fabric8.openshift.api.model.Route;
 import io.fabric8.openshift.api.model.operatorhub.v1.OperatorGroup;
@@ -76,6 +83,7 @@ import io.quarkus.test.bootstrap.Service;
 import io.quarkus.test.configuration.PropertyLookup;
 import io.quarkus.test.logging.Log;
 import io.quarkus.test.model.CustomVolume;
+import io.quarkus.test.openshift.utils.OpenShiftPropertiesUtils;
 import io.quarkus.test.services.URILike;
 import io.quarkus.test.services.operator.model.CustomResourceStatus;
 import io.quarkus.test.services.quarkus.model.QuarkusProperties;
@@ -97,6 +105,7 @@ public final class OpenShiftClient {
     private static final Duration TIMEOUT_DEFAULT = Duration.ofMinutes(5);
     private static final int PROJECT_NAME_SIZE = 10;
     private static final int PROJECT_CREATION_RETRIES = 5;
+    private static final int SPECS_SECRET_NAME_LIMIT = 63;
     private static final String OPERATOR_PHASE_INSTALLED = "Succeeded";
     private static final String BUILD_FAILED_STATUS = "Failed";
     private static final String CUSTOM_RESOURCE_EXPECTED_TYPE = "Ready";
@@ -163,7 +172,7 @@ public final class OpenShiftClient {
         try {
             new Command(OC, "apply", "-f", file.toAbsolutePath().toString(), "-n", project).runAndWait();
         } catch (Exception e) {
-            fail("Failed to apply resource " + file.toAbsolutePath().toString() + " . Caused by " + e.getMessage());
+            fail("Failed to apply resource " + file.toAbsolutePath() + " . Caused by " + e.getMessage());
         }
     }
 
@@ -186,7 +195,7 @@ public final class OpenShiftClient {
         try {
             new Command(OC, "delete", "-f", file.toAbsolutePath().toString(), "-n", project).runAndWait();
         } catch (Exception e) {
-            fail("Failed to apply resource " + file.toAbsolutePath().toString() + " . Caused by " + e.getMessage());
+            fail("Failed to apply resource " + file.toAbsolutePath() + " . Caused by " + e.getMessage());
         }
     }
 
@@ -211,20 +220,44 @@ public final class OpenShiftClient {
     }
 
     /**
-     * Update the deployment config using the service properties.
+     * Update the deployment and service using the service properties.
      *
      * @param service
      */
-    public void applyServicePropertiesUsingDeploymentConfig(Service service) {
-        DeploymentConfig dc = client.deploymentConfigs().withName(service.getName()).get();
-        Map<String, String> enrichProperties = enrichProperties(service.getProperties(), dc);
+    public void applyServicePropertiesToDeployment(Service service) {
+        var serviceName = service.getName();
+        Deployment deployment = client.apps().deployments().withName(serviceName).get();
+        boolean isQuarkusRuntime = isQuarkusRuntime(deployment.getSpec().getTemplate().getMetadata().getLabels());
+        Map<String, String> enrichProperties = enrichProperties(service.getProperties(), deployment, isQuarkusRuntime);
+        if (isQuarkusRuntime) {
+            updateAnnotationsIfNecessary(service, serviceName);
+        }
 
-        dc.getSpec().getTemplate().getSpec().getContainers().forEach(container -> {
-            enrichProperties.entrySet().forEach(
-                    envVar -> container.getEnv().add(new EnvVar(envVar.getKey(), envVar.getValue(), null)));
+        deployment.getSpec().getTemplate().getSpec().getContainers().forEach(container -> {
+            enrichProperties.forEach((key, value) -> container.getEnv().add(new EnvVar(key, value, null)));
         });
+        client.apps().deployments().resource(deployment).unlock().createOr(NonDeletingOperation::patch);
+    }
 
-        client.deploymentConfigs().resource(dc).createOrReplace();
+    private void updateAnnotationsIfNecessary(Service service, String serviceName) {
+        var annotations = collectAnnotations(service);
+        if (!annotations.isEmpty()) {
+            var k8ServiceResource = client.services().withName(serviceName);
+            AwaitilityUtils.untilIsNotNull(k8ServiceResource::get);
+            var k8Service = k8ServiceResource.get();
+            boolean edited = false;
+            for (var keyToVal : annotations) {
+                var annotationName = keyToVal.key();
+                if (!k8Service.getMetadata().getAnnotations().containsKey(annotationName)) {
+                    k8Service = k8Service.edit().editMetadata().addToAnnotations(annotationName, keyToVal.value()).endMetadata()
+                            .build();
+                    edited = true;
+                }
+            }
+            if (edited) {
+                k8ServiceResource.patch(k8Service);
+            }
+        }
     }
 
     /**
@@ -232,12 +265,12 @@ public final class OpenShiftClient {
      *
      * @param service
      */
-    @Deprecated(forRemoval = true) //This method is not used anymore. Remove this annotation if you need it for some reason
+    @Deprecated(forRemoval = true)
+    //This method is not used anymore. Remove this annotation if you need it for some reason
     public void rollout(Service service) {
-        Log.info("Rolling out deploymentConfig " + service.getName() + " in namespace " + currentNamespace);
+        Log.info("Rolling out deployment " + service.getName() + " in namespace " + currentNamespace);
         Log.info("Run this command to replicate: oc rollout latest dc/" + service.getName() + " -n " + currentNamespace);
-        DeploymentConfig dc = client.deploymentConfigs().withName(service.getName()).deployLatest(true);
-        Log.info("dc/" + service.getName() + " rolled out.");
+        Log.info("deployment/" + service.getName() + " rolled out.");
     }
 
     /**
@@ -297,6 +330,34 @@ public final class OpenShiftClient {
     }
 
     /**
+     * Create a service for deployment.
+     * Usually done automatically, or inside yamls, so this method should be used only in a very special cases,
+     * eg: https://github.com/quarkusio/quarkus/issues/34645
+     *
+     * @param appName name of the application to expose
+     * @param serviceName name of service, which is to be created
+     * @param port port on the service and the app (they are the same to keep things simple)
+     */
+    public void createService(String appName, String serviceName, int port) {
+        io.fabric8.kubernetes.api.model.Service route = client.services().withName(serviceName).get();
+        if (route != null) {
+            // already exposed.
+            return;
+        }
+
+        try {
+            new Command(OC, "expose", "deployment/" + appName,
+                    "--port=" + port,
+                    "--target-port=" + port,
+                    "--name=" + serviceName,
+                    "-n", currentNamespace,
+                    "-l" + LABEL_SCENARIO_ID + "=" + getScenarioId()).runAndWait();
+        } catch (Exception e) {
+            fail("Service was not created. Caused by " + e.getMessage());
+        }
+    }
+
+    /**
      * Scale the service to the replicas.
      *
      * @param service
@@ -308,22 +369,14 @@ public final class OpenShiftClient {
         }
 
         try {
-            new Command(OC, "scale", "dc/" + service.getName(), "--replicas=" + replicas, "-n", currentNamespace).runAndWait();
+            new Command(OC, "scale",
+                    "deployment/" + service.getName(),
+                    "--replicas=" + replicas,
+                    "-n", currentNamespace)
+                    .runAndWait();
         } catch (Exception e) {
             fail("Service failed to be scaled. Caused by " + e.getMessage());
         }
-    }
-
-    public void scaleToWhenDcReady(Service service, int replicas) {
-        if (isServerlessService(service.getName())) {
-            return;
-        }
-
-        AwaitilityUtils.untilIsTrue(() -> {
-            Log.info("Waiting for dc to be ready");
-            return client.deploymentConfigs().withName(service.getName()).get() != null;
-        });
-        scaleTo(service, replicas);
     }
 
     /**
@@ -362,8 +415,8 @@ public final class OpenShiftClient {
      * @return ready replicas amount
      */
     public int readyReplicas(Service service) {
-        DeploymentConfig dc = client.deploymentConfigs().withName(service.getName()).get();
-        return Optional.ofNullable(dc.getStatus().getReadyReplicas()).orElse(0);
+        Deployment deployment = client.apps().deployments().withName(service.getName()).get();
+        return Optional.ofNullable(deployment.getStatus().getReadyReplicas()).orElse(0);
     }
 
     /**
@@ -385,7 +438,7 @@ public final class OpenShiftClient {
             PodResource resource = client.pods().withName(podName);
             for (Container container : pod.getSpec().getContainers()) {
                 logs.put(podName + "-" + container.getName(),
-                        ((ContainerResource) resource.inContainer(container.getName())).getLog());
+                        resource.inContainer(container.getName()).getLog());
             }
         }
 
@@ -406,7 +459,7 @@ public final class OpenShiftClient {
                 PodResource resource = client.pods().withName(podName);
                 for (Container container : pod.getSpec().getContainers()) {
                     logs.put(podName + "-" + container.getName(),
-                            ((ContainerResource) resource.inContainer(container.getName())).getLog());
+                            resource.inContainer(container.getName()).getLog());
                 }
             }
         }
@@ -460,9 +513,8 @@ public final class OpenShiftClient {
         try {
             List<HasMetadata> objs = loadYaml(Files.readString(file));
             for (HasMetadata obj : objs) {
-                if ((obj instanceof ImageStream)
+                if ((obj instanceof ImageStream is)
                         && !StringUtils.equals(obj.getMetadata().getName(), service.getName())) {
-                    ImageStream is = (ImageStream) obj;
                     untilIsTrue(() -> hasImageStreamTags(is),
                             AwaitilitySettings.defaults().withService(service)
                                     .usingTimeout(
@@ -484,9 +536,9 @@ public final class OpenShiftClient {
         groupModel.setMetadata(new ObjectMeta());
         groupModel.getMetadata().setName(service.getName());
         groupModel.setSpec(new OperatorGroupSpec());
-        groupModel.getSpec().setTargetNamespaces(Arrays.asList(currentNamespace));
-        // call createOrReplace
-        client.resource(groupModel).createOrReplace();
+        groupModel.getSpec().setTargetNamespaces(Collections.singletonList(currentNamespace));
+        // call createOr and if it exists the update will be done
+        client.resource(groupModel).unlock().createOr(NonDeletingOperation::update);
 
         // Install the subscription
         Subscription subscriptionModel = new Subscription();
@@ -666,7 +718,7 @@ public final class OpenShiftClient {
                 isClientReady = false;
             }
         } else {
-            deleteResourcesByLabel(LABEL_SCENARIO_ID, getScenarioId());
+            deleteResources(getScenarioId());
         }
     }
 
@@ -678,12 +730,36 @@ public final class OpenShiftClient {
         return kn;
     }
 
+    public void removeSecret(String secretName) {
+        var secret = client.secrets().withName(secretName);
+        if (secret.get() != null) {
+            secret.delete();
+        }
+    }
+
+    public boolean isAnyServicePodReady(String serviceName) {
+        return client.pods().withLabel(LABEL_TO_WATCH_FOR_LOGS, serviceName).resources().anyMatch(Resource::isReady);
+    }
+
+    private void addAnnotatedConfigMap(String configMapName, String annotationName, String annotationValue) {
+        var configMapResource = client.configMaps().withName(configMapName);
+        if (configMapResource.get() == null) {
+            var configMap = new ConfigMapBuilder()
+                    .editMetadata()
+                    .withName(configMapName)
+                    .addToAnnotations(annotationName, annotationValue)
+                    .endMetadata()
+                    .build();
+            client.resource(configMap).create();
+        }
+    }
+
     /**
      * Delete test resources.
      */
-    private void deleteResourcesByLabel(String labelName, String labelValue) {
+    private void deleteResources(String labelValue) {
         try {
-            String label = String.format("%s=%s", labelName, labelValue);
+            String label = String.format("%s=%s", OpenShiftClient.LABEL_SCENARIO_ID, labelValue);
             new Command(OC, "delete", "-n", currentNamespace, "all", "-l", label).runAndWait();
         } catch (Exception e) {
             fail("Project failed to be deleted. Caused by " + e.getMessage());
@@ -694,6 +770,7 @@ public final class OpenShiftClient {
     }
 
     private String enrichTemplate(Service service, String template, Map<String, String> extraTemplateProperties) {
+        var serviceName = service.getName();
         List<HasMetadata> objs = loadYaml(template);
         for (HasMetadata obj : objs) {
             // set namespace
@@ -704,56 +781,65 @@ public final class OpenShiftClient {
             objMetadataLabels.put(LABEL_SCENARIO_ID, getScenarioId());
             obj.getMetadata().setLabels(objMetadataLabels);
 
-            if (obj instanceof DeploymentConfig) {
-                DeploymentConfig dc = (DeploymentConfig) obj;
-
-                // set deployment name
-                dc.getMetadata().setName(service.getName());
+            if (obj instanceof Deployment deployment) {
 
                 // set metadata to template
-                dc.getSpec().getTemplate().getMetadata().setNamespace(project());
+                deployment.getSpec().getTemplate().getMetadata().setNamespace(project());
 
                 // add label for logs and and unique scenarioId
-                Map<String, String> templateMetadataLabels = dc.getSpec().getTemplate().getMetadata().getLabels();
-                templateMetadataLabels.put(LABEL_TO_WATCH_FOR_LOGS, service.getName());
+                Map<String, String> templateMetadataLabels = deployment.getSpec().getTemplate().getMetadata().getLabels();
+                templateMetadataLabels.put(LABEL_TO_WATCH_FOR_LOGS, serviceName);
                 templateMetadataLabels.put(LABEL_SCENARIO_ID, getScenarioId());
+                final boolean isQuarkusRuntime = isQuarkusRuntime(templateMetadataLabels);
 
                 // add env var properties
-                Map<String, String> enrichProperties = enrichProperties(service.getProperties(), dc);
+                Map<String, String> enrichProperties = enrichProperties(service.getProperties(), deployment, isQuarkusRuntime);
 
                 final Map<String, String> environmentVariables;
-                final boolean isQuarkusRuntime = dc.getSpec().getTemplate().getMetadata() != null
-                        && dc.getSpec().getTemplate().getMetadata().getLabels() != null
-                        && "quarkus"
-                                .equals(dc.getSpec().getTemplate().getMetadata().getLabels().get("app.openshift.io/runtime"));
                 if (isQuarkusRuntime) {
+                    var propsThatRequireDottedFormat = appPropsThatRequireDottedFormat(enrichProperties);
+
                     // Configuration properties are only converted to MP Config format for Quarkus runtime for
                     // other runtimes may expect different format.
-                    environmentVariables = convertPropertiesToEnvironment(enrichProperties);
+                    environmentVariables = convertPropertiesToEnvironment(enrichProperties, propsThatRequireDottedFormat);
 
                     // config properties that contains dashes or other special chars need to be added in dotted
                     // format in a config source with lower priority than env var config source has
                     // see https://quarkus.io/version/main/guides/config-reference#environment-variables for more info
-                    var appPropertiesFileContent = createAppPropsForPropsThatRequireDottedFormat(enrichProperties);
+                    var appPropertiesFileContent = createAppPropsForPropsThatRequireDottedFormat(propsThatRequireDottedFormat);
                     if (!appPropertiesFileContent.isEmpty()) {
-                        mountPropertiesAsQuarkusAppConfigFile(service, enrichProperties, dc, appPropertiesFileContent);
+                        mountPropertiesAsQuarkusAppConfigFile(service, enrichProperties, deployment, appPropertiesFileContent);
                     }
                 } else {
                     environmentVariables = enrichProperties;
                 }
 
                 environmentVariables.putAll(extraTemplateProperties);
-                dc.getSpec().getTemplate().getSpec().getContainers()
-                        .forEach(container -> environmentVariables.entrySet().forEach(
-                                property -> {
-                                    String key = property.getKey();
-                                    EnvVar envVar = getEnvVarByKey(key, container);
-                                    if (envVar == null) {
-                                        container.getEnv().add(new EnvVar(key, property.getValue(), null));
-                                    } else {
-                                        envVar.setValue(property.getValue());
-                                    }
-                                }));
+                deployment.getSpec().getTemplate().getSpec().getContainers()
+                        .forEach(container -> environmentVariables.forEach((key, value) -> {
+                            EnvVar envVar = getEnvVarByKey(key, container);
+                            if (envVar == null) {
+                                container.getEnv().add(new EnvVar(key, value, null));
+                            } else {
+                                envVar.setValue(value);
+                            }
+                        }));
+            } else if (obj instanceof io.fabric8.kubernetes.api.model.Service k8Service) {
+                var k8ServiceName = k8Service.getMetadata().getName();
+                boolean isQuarkusRuntime = isQuarkusRuntime(k8Service.getMetadata().getLabels());
+                // Subject Alternative Name (SAN) must match service DNS name,
+                // and injected certificates will have SAN set to one of OpenShift services,
+                // but we can have 2 services created for one application,
+                // one for HTTP server, one for management interface
+                // so far, we don't support management interface,
+                // which allows mount exactly one secret created for the HTTP server
+                if (isQuarkusRuntime && isNotManagementInterfaceService(k8ServiceName)) {
+                    collectAnnotations(service).forEach(keyToVal -> {
+                        var annotationKey = keyToVal.key();
+                        var annotationVal = keyToVal.value();
+                        k8Service.getMetadata().getAnnotations().put(annotationKey, annotationVal);
+                    });
+                }
             }
         }
 
@@ -761,8 +847,8 @@ public final class OpenShiftClient {
         list.setItems(objs);
         try {
             ByteArrayOutputStream os = new ByteArrayOutputStream();
-            Serialization.yamlMapper().writeValue(os, list);
-            template = new String(os.toByteArray());
+            os.write(Serialization.asYaml(list).getBytes());
+            template = os.toString();
         } catch (IOException e) {
             fail("Failed adding properties into OpenShift template. Caused by " + e.getMessage());
         }
@@ -770,7 +856,31 @@ public final class OpenShiftClient {
         return template;
     }
 
+    private static List<OpenShiftPropertiesUtils.PropertyToValue> collectAnnotations(Service service) {
+        return service.getProperties().values()
+                .stream()
+                .filter(OpenShiftPropertiesUtils::isAnnotation)
+                .map(OpenShiftPropertiesUtils::getServiceAnnotation)
+                .toList();
+    }
+
+    private static boolean isNotManagementInterfaceService(String serviceName) {
+        return serviceName == null || !serviceName.endsWith("-management");
+    }
+
     private String createAppPropsForPropsThatRequireDottedFormat(Map<String, String> configProperties) {
+        return configProperties
+                .entrySet()
+                .stream()
+                .map(e -> e.getKey() + "=" + e.getValue() + System.lineSeparator())
+                .collect(Collectors.joining());
+    }
+
+    private static boolean isQuarkusRuntime(Map<String, String> templateMetadataLabels) {
+        return "quarkus".equals(templateMetadataLabels.get("app.openshift.io/runtime"));
+    }
+
+    private static Map<String, String> appPropsThatRequireDottedFormat(Map<String, String> configProperties) {
         return configProperties
                 .entrySet()
                 .stream()
@@ -780,12 +890,11 @@ public final class OpenShiftClient {
                     var configPropertyNameCreatedFromEnvName = StringUtil.toLowerCaseAndDotted(environmentVariableName);
                     return !configPropertyNameCreatedFromEnvName.equalsIgnoreCase(configPropertyName);
                 })
-                .map(e -> e.getKey() + "=" + e.getValue() + System.lineSeparator())
-                .collect(Collectors.joining());
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     private void mountPropertiesAsQuarkusAppConfigFile(Service service, Map<String, String> enrichProperties,
-            DeploymentConfig dc, String appPropertiesFileContent) {
+            Deployment deployment, String appPropertiesFileContent) {
         var appConfigFileName = service.getName().toLowerCase() + "-quarkus-application-configuration-file";
 
         // create dedicated config map only with app properties that must exist in dotted config source
@@ -799,10 +908,10 @@ public final class OpenShiftClient {
                 .withName(appConfigFileName)
                 .withConfigMap(configMapVolumeSource)
                 .build();
-        dc.getSpec().getTemplate().getSpec().getVolumes().add(volume);
+        deployment.getSpec().getTemplate().getSpec().getVolumes().add(volume);
 
         // $PWD/config/application.properties
-        var pwd = QuarkusProperties.isNativePackageType() ? "/home/quarkus" : "/deployments";
+        var pwd = QuarkusProperties.isNativeEnabled() ? "/home/quarkus" : "/deployments";
 
         // mount volume to each deployment config containers
         var volumeMount = new VolumeMountBuilder()
@@ -811,23 +920,28 @@ public final class OpenShiftClient {
                 .withReadOnly(true)
                 .withMountPath(pwd + "/config/application.properties")
                 .build();
-        dc.getSpec().getTemplate().getSpec().getContainers()
+        deployment.getSpec().getTemplate().getSpec().getContainers()
                 .forEach(container -> container.getVolumeMounts()
                         .add(volumeMount));
     }
 
     /**
-     *
      * Converts names of configuration properties to the MicroProfile Config specification compliant environment
      * variables format, e.g. quarkus.consul-config.agent.host-port->QUARKUS_CONSUL_CONFIG_AGENT_HOST_PORT
-     *
+     * <p>
      * see https://quarkus.io/guides/config-reference#environment-variables for details
      */
-    private static Map<String, String> convertPropertiesToEnvironment(Map<String, String> properties) {
+    private static Map<String, String> convertPropertiesToEnvironment(Map<String, String> properties,
+            Map<String, String> propsThatRequireDottedFormat) {
         HashMap<String, String> environment = new HashMap<>(properties.size());
         properties.forEach((property, value) -> {
-            String variable = StringUtil.replaceNonAlphanumericByUnderscores(property).toUpperCase();
-            environment.put(variable, value);
+            // non-Quarkus properties may require different format than MP config format
+            // they could also consume environment variables directly but the mapping from env vars is not one to one,
+            // therefore we should use Quarkus config source to propagate the information
+            if (!propsThatRequireDottedFormat.containsKey(property) || isQuarkusProperty(property)) {
+                String variable = StringUtil.replaceNonAlphanumericByUnderscores(property).toUpperCase();
+                environment.put(variable, value);
+            }
         });
         return environment;
     }
@@ -836,11 +950,15 @@ public final class OpenShiftClient {
         return container.getEnv().stream().filter(env -> StringUtils.equals(key, env.getName())).findFirst().orElse(null);
     }
 
-    private Map<String, String> enrichProperties(Map<String, String> properties, DeploymentConfig dc) {
+    private Map<String, String> enrichProperties(Map<String, String> properties, Deployment deployment,
+            boolean isQuarkusRuntime) {
         // mount path x volume
         Map<String, CustomVolume> volumes = new HashMap<>();
 
+        // the idea of the 'output' is that if you have quarkus.some.property.key=secret::/path
+        // then it is turned into quarkus.some.property.key=path
         Map<String, String> output = new HashMap<>();
+
         for (Entry<String, String> entry : properties.entrySet()) {
             String propertyValue = entry.getValue();
             if (isResource(propertyValue)) {
@@ -880,14 +998,15 @@ public final class OpenShiftClient {
                 }
             } else if (propertyValue.startsWith(SECRET_WITH_DESTINATION_PREFIX)) {
                 String path = entry.getValue().replace(SECRET_WITH_DESTINATION_PREFIX, StringUtils.EMPTY);
-                int separatorIdx = path.indexOf(DESTINATION_TO_FILENAME_SEPARATOR);
+                int separatorIdx = path.lastIndexOf(DESTINATION_TO_FILENAME_SEPARATOR);
                 final String mountPath = path.substring(0, separatorIdx);
-                final String filename = getFileName(path.substring(separatorIdx + 1));
-                final String secretName = normalizeConfigMapName(mountPath, filename);
+                final String filename = path.substring(separatorIdx + 1);
+                String secretName = normalizeConfigMapName(mountPath, filename);
 
                 // Push secret file
-                doCreateSecretFromFile(secretName, getFilePath(SLASH + filename));
                 propertyValue = joinMountPathAndFileName(mountPath, filename);
+                String filePath = Files.exists(Path.of(propertyValue)) ? propertyValue : getFilePath(SLASH + filename);
+                doCreateSecretFromFile(secretName, filePath);
                 volumes.putIfAbsent(mountPath, new CustomVolume(secretName, "", SECRET));
             } else if (isSecret(propertyValue)) {
                 String path = entry.getValue().replace(SECRET_PREFIX, StringUtils.EMPTY);
@@ -900,16 +1019,41 @@ public final class OpenShiftClient {
                 volumes.put(mountPath, new CustomVolume(secretName, "", SECRET));
 
                 propertyValue = joinMountPathAndFileName(mountPath, filename);
+            } else if (isQuarkusRuntime && isMountSecret(propertyValue)) {
+                // mount existing secret
+                var secretNameToMountPath = getMountSecret(propertyValue);
+                var secretName = secretNameToMountPath.key();
+                var mountPath = secretNameToMountPath.value();
+                volumes.put(mountPath, new CustomVolume(secretName, "", SECRET));
+
+                propertyValue = mountPath;
+            } else if (isQuarkusRuntime && isMountConfigMap(propertyValue)) {
+                // mount existing configmap
+                var configMapNameToMountPath = getMountConfigMap(propertyValue);
+                var configMapName = configMapNameToMountPath.key();
+                var mountPath = configMapNameToMountPath.value();
+                volumes.put(mountPath, new CustomVolume(configMapName, "", CONFIG_MAP));
+
+                propertyValue = mountPath;
+            } else if (isQuarkusRuntime && isAnnotatedConfigMap(propertyValue)) {
+                var annotatedConfigMap = getAnnotatedConfigMap(propertyValue);
+                var configMapName = annotatedConfigMap.key();
+                var annotationName = annotatedConfigMap.value().key();
+                var annotationVal = annotatedConfigMap.value().value();
+                addAnnotatedConfigMap(configMapName, annotationName, annotationVal);
+
+                // no sensible value is expected, just assign something
+                propertyValue = annotationVal;
             }
 
             output.put(entry.getKey(), propertyValue);
         }
 
         for (Entry<String, CustomVolume> volume : volumes.entrySet()) {
-            dc.getSpec().getTemplate().getSpec().getVolumes().add(volume.getValue().getVolume());
+            deployment.getSpec().getTemplate().getSpec().getVolumes().add(volume.getValue().getVolume());
 
             // Configure all the containers to map the volume
-            dc.getSpec().getTemplate().getSpec().getContainers()
+            deployment.getSpec().getTemplate().getSpec().getContainers()
                     .forEach(container -> container.getVolumeMounts()
                             .add(createVolumeMount(volume)));
         }
@@ -940,7 +1084,7 @@ public final class OpenShiftClient {
         } else {
             // create new one
             configMaps.resource(new ConfigMapBuilder().withNewMetadata().withName(configMapName).endMetadata()
-                    .addToData(key, value).build()).createOrReplace();
+                    .addToData(key, value).build()).unlock().create();
         }
     }
 
@@ -990,9 +1134,17 @@ public final class OpenShiftClient {
 
     private String normalizeConfigMapName(String mountPath, String fileName) {
         // /some/mount/path/file-name => some-mount-path-file-name
-        return StringUtils.removeStart(joinMountPathAndFileName(mountPath, fileName), SLASH)
+        var newName = StringUtils.removeStart(joinMountPathAndFileName(mountPath, fileName), SLASH)
                 .replaceAll(Pattern.quote("."), "-")
                 .replaceAll(SLASH, "-");
+        if (newName.length() > SPECS_SECRET_NAME_LIMIT) {
+            newName = newName.substring(newName.length() - SPECS_SECRET_NAME_LIMIT);
+            while (newName.startsWith("-")) {
+                // must not start with '-something' as it's considered to be a flag
+                newName = newName.substring(1);
+            }
+        }
+        return newName;
     }
 
     private static String joinMountPathAndFileName(String mountPath, String fileName) {
@@ -1078,5 +1230,9 @@ public final class OpenShiftClient {
         return ThreadLocalRandom.current().ints(PROJECT_NAME_SIZE, 'a', 'z' + 1)
                 .collect(() -> new StringBuilder("ts-"), StringBuilder::appendCodePoint, StringBuilder::append)
                 .toString();
+    }
+
+    private static boolean isQuarkusProperty(String propertyKey) {
+        return propertyKey.startsWith("quarkus.");
     }
 }

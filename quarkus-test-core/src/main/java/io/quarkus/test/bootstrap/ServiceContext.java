@@ -3,6 +3,7 @@ package io.quarkus.test.bootstrap;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 public final class ServiceContext {
 
@@ -10,6 +11,23 @@ public final class ServiceContext {
     private final ScenarioContext scenarioContext;
     private final Path serviceFolder;
     private final Map<String, Object> store = new HashMap<>();
+
+    /**
+     * Whatever we put into {@link Service#withProperty(String, String)} is stored inside static field instance.
+     * Like 'static RestService app = new RestService()'.
+     * If a couple of test classes has same superclass and the 'app' field is in that superclass, properties are shared.
+     * That is if during the execution of the first test class you put there dynamically property "a",
+     * the "a" property will be there when the next test class is executed.
+     *
+     * This field stores properties that has only a test class scope.
+     */
+    private final Map<String, String> configPropertiesWithTestScope = new HashMap<>();
+
+    ServiceContext(Service owner, ScenarioContext scenarioContext, Path serviceFolder) {
+        this.owner = owner;
+        this.scenarioContext = scenarioContext;
+        this.serviceFolder = Objects.requireNonNull(serviceFolder);
+    }
 
     ServiceContext(Service owner, ScenarioContext scenarioContext) {
         this.owner = owner;
@@ -52,6 +70,15 @@ public final class ServiceContext {
     @SuppressWarnings("unchecked")
     public <T> T get(String key) {
         return (T) store.get(key);
+    }
+
+    public ServiceContext withTestScopeConfigProperty(String key, String value) {
+        configPropertiesWithTestScope.put(key, value);
+        return this;
+    }
+
+    public Map<String, String> getConfigPropertiesWithTestScope() {
+        return configPropertiesWithTestScope;
     }
 
     private String getArtifactIdFromGav(String gav) {

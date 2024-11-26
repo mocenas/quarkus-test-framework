@@ -39,6 +39,10 @@ public class KeycloakGenericDockerContainerManagedResource extends GenericDocker
 
         container.withCreateContainerCmdModifier(cmd -> cmd.withName(DockerUtils.generateDockerContainerName()));
 
+        // Currently, we can't properly set the container's memory limit when running with Podman.
+        // More details on this issue can be found here: https://github.com/quarkus-qe/quarkus-test-suite/issues/2106
+        container.withEnv("JAVA_OPTS_APPEND", String.format("-XX:MaxRAM=%sm", model.getMemoryLimitMiB()));
+
         if (isReusable()) {
             Log.info(model.getContext().getOwner(), "Running container on Reusable mode");
             Log.warn(model.getContext().getOwner(), "Reusable mode expose testcontainers 'withReuse' method that is"
@@ -65,5 +69,10 @@ public class KeycloakGenericDockerContainerManagedResource extends GenericDocker
 
     private boolean isPrivileged() {
         return model.getContext().getOwner().getConfiguration().isTrue(PRIVILEGED_MODE);
+    }
+
+    static long convertMiBtoBytes(long valueInMiB) {
+        final var exponentMiB = 20;
+        return (long) (valueInMiB * Math.pow(2, exponentMiB));
     }
 }

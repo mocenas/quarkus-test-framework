@@ -1,5 +1,7 @@
 package io.quarkus.test.services.quarkus;
 
+import static io.quarkus.test.utils.TestExecutionProperties.rememberThisIsCliApp;
+
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -33,6 +35,11 @@ public class ProdLocalhostQuarkusApplicationManagedResource extends LocalhostQua
                 command.add(ENABLE_PREVIEW);
             }
             command.addAll(systemProperties);
+            var debugOptions = model.getContext().getTestContext().debugOptions();
+            if (debugOptions != null && debugOptions.debug()) {
+                var suspend = debugOptions.suspend() ? "y" : "n";
+                command.add("-agentlib:jdwp=transport=dt_socket,address=localhost:5005,server=y,suspend=" + suspend);
+            }
             command.add("-jar");
             command.add(model.getArtifact().toAbsolutePath().toString());
         } else {
@@ -52,6 +59,7 @@ public class ProdLocalhostQuarkusApplicationManagedResource extends LocalhostQua
             if (property.contains(QUARKUS_ARGS_PROPERTY_NAME)) {
                 propertiesIt.remove();
                 args = property.replace("-D" + QUARKUS_ARGS_PROPERTY_NAME + "=", "").split(" ");
+                rememberThisIsCliApp(this.getContext());
                 break;
             }
         }

@@ -4,7 +4,7 @@
     <parent>
         <groupId>io.quarkus.qe</groupId>
         <artifactId>quarkus-examples-parent</artifactId>
-        <version>1.4.1.Beta5-SNAPSHOT</version>
+        <version>1.6.0.Beta16-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
     <artifactId>examples-consul</artifactId>
@@ -12,12 +12,12 @@
     <dependencies>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-resteasy</artifactId>
+            <artifactId>quarkus-rest</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkiverse.config</groupId>
             <artifactId>quarkus-config-consul</artifactId>
-            <version>2.2.2</version>
+            <version>2.4.0</version>
         </dependency>
         <dependency>
             <groupId>io.quarkus.qe</groupId>

@@ -22,7 +22,7 @@ public abstract class BaseGreetingResourceIT {
     static ConsulService consul;
 
     @QuarkusApplication
-    static RestService app = new RestService().withProperty("quarkus.consul-config.agent.host-port",
+    static final RestService app = new RestService().withProperty("quarkus.consul-config.agent.host-port",
             () -> consul.getConsulEndpoint());
 
     @Test
@@ -38,7 +38,7 @@ public abstract class BaseGreetingResourceIT {
         app.given().get("/api/from-custom-source").then().statusCode(HttpStatus.SC_OK).body(is("Hello Config Source!"));
     }
 
-    protected static final void onLoadConfigureConsul(Service service) {
+    protected static void onLoadConfigureConsul(Service service) {
         consul.loadPropertiesFromFile(KEY, "application.properties");
     }
 

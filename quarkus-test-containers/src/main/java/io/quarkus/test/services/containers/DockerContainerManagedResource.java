@@ -7,6 +7,7 @@ import static io.quarkus.test.utils.PropertiesUtils.RESOURCE_WITH_DESTINATION_PR
 import static io.quarkus.test.utils.PropertiesUtils.RESOURCE_WITH_DESTINATION_PREFIX_MATCHER;
 import static io.quarkus.test.utils.PropertiesUtils.RESOURCE_WITH_DESTINATION_SPLIT_CHAR;
 import static io.quarkus.test.utils.PropertiesUtils.SECRET_PREFIX;
+import static io.quarkus.test.utils.PropertiesUtils.SECRET_WITH_DESTINATION_PREFIX;
 import static io.quarkus.test.utils.PropertiesUtils.SLASH;
 
 import java.nio.file.Files;
@@ -24,16 +25,20 @@ import org.testcontainers.utility.MountableFile;
 import io.quarkus.test.bootstrap.ManagedResource;
 import io.quarkus.test.bootstrap.Protocol;
 import io.quarkus.test.bootstrap.ServiceContext;
+import io.quarkus.test.configuration.PropertyLookup;
+import io.quarkus.test.logging.Log;
 import io.quarkus.test.logging.LoggingHandler;
 import io.quarkus.test.logging.TestContainersLoggingHandler;
 import io.quarkus.test.services.URILike;
 import io.quarkus.test.utils.DockerUtils;
+import io.quarkus.test.utils.FileUtils;
 
 public abstract class DockerContainerManagedResource implements ManagedResource {
 
     public static final String DOCKER_INNER_CONTAINER = DockerContainerManagedResource.class.getName() + "_inner";
     private static final String DELETE_IMAGE_ON_STOP_PROPERTY = "container.delete.image.on.stop";
     private static final String TARGET = "target";
+    private static final PropertyLookup CONTAINER_STARTUP_ATTEMPTS = new PropertyLookup("container-startup-attempts", "1");
 
     private final ServiceContext context;
 
@@ -62,6 +67,7 @@ public abstract class DockerContainerManagedResource implements ManagedResource 
         innerContainer.withStartupTimeout(context.getOwner().getConfiguration()
                 .getAsDuration(SERVICE_STARTUP_TIMEOUT, SERVICE_STARTUP_TIMEOUT_DEFAULT));
         innerContainer.withEnv(resolveProperties());
+        innerContainer.withStartupAttempts(CONTAINER_STARTUP_ATTEMPTS.getAsInteger());
 
         loggingHandler = new TestContainersLoggingHandler(context.getOwner(), innerContainer);
         loggingHandler.startWatching();
@@ -119,7 +125,7 @@ public abstract class DockerContainerManagedResource implements ManagedResource 
             innerContainer.start();
         } catch (Exception ex) {
             stop();
-
+            loggingHandler.logs().forEach(Log::info);
             throw ex;
         }
     }
@@ -131,6 +137,11 @@ public abstract class DockerContainerManagedResource implements ManagedResource 
             if (isResource(entry.getValue())) {
                 value = entry.getValue().replace(RESOURCE_PREFIX, StringUtils.EMPTY);
                 addFileToContainer(value);
+            } else if (isSecretWithDestinationPath(entry.getValue())) {
+                value = entry.getValue().replace(SECRET_WITH_DESTINATION_PREFIX, StringUtils.EMPTY);
+                String destinationPath = value.split(RESOURCE_WITH_DESTINATION_SPLIT_CHAR)[0];
+                String fileName = value.split(RESOURCE_WITH_DESTINATION_SPLIT_CHAR)[1];
+                addFileToContainer(destinationPath, fileName);
             } else if (isResourceWithDestinationPath(entry.getValue())) {
                 value = entry.getValue().replace(RESOURCE_WITH_DESTINATION_PREFIX, StringUtils.EMPTY);
                 if (!value.matches(RESOURCE_WITH_DESTINATION_PREFIX_MATCHER)) {
@@ -152,19 +163,29 @@ public abstract class DockerContainerManagedResource implements ManagedResource 
         return properties;
     }
 
-    private void addFileToContainer(String filePath) {
-        if (Files.exists(Path.of(TARGET, filePath))) {
+    private void addFileToContainer(String path) {
+        Path filePath = Path.of(TARGET, path);
+        if (Files.exists(filePath)) {
             // Mount file if it's a file
-            innerContainer.withCopyFileToContainer(MountableFile.forHostPath(Path.of(TARGET, filePath)), filePath);
+            innerContainer.withCopyFileToContainer(MountableFile.forHostPath(filePath), path);
         } else {
             // then file is in the classpath
-            innerContainer.withClasspathResourceMapping(filePath, filePath, BindMode.READ_ONLY);
+            innerContainer.withClasspathResourceMapping(path, path, BindMode.READ_ONLY);
         }
     }
 
     private void addFileToContainer(String destinationPath, String hostFilePath) {
+        var filePath = FileUtils.findTargetFile(Path.of("target"), hostFilePath);
         String containerFullPath = destinationPath + SLASH + hostFilePath;
-        innerContainer.withClasspathResourceMapping(hostFilePath, containerFullPath, BindMode.READ_ONLY);
+        if (filePath.isEmpty()) {
+            innerContainer.withClasspathResourceMapping(hostFilePath, containerFullPath, BindMode.READ_ONLY);
+        } else {
+            innerContainer.withCopyFileToContainer(MountableFile.forHostPath(filePath.get()), containerFullPath);
+        }
+    }
+
+    private static boolean isSecretWithDestinationPath(String key) {
+        return key.startsWith(SECRET_WITH_DESTINATION_PREFIX);
     }
 
     private boolean isResourceWithDestinationPath(String key) {

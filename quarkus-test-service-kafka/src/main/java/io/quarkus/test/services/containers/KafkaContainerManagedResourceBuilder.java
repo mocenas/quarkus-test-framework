@@ -3,6 +3,7 @@ package io.quarkus.test.services.containers;
 import java.lang.annotation.Annotation;
 import java.util.ServiceLoader;
 
+import io.quarkus.test.bootstrap.LocalhostManagedResource;
 import io.quarkus.test.bootstrap.ManagedResource;
 import io.quarkus.test.bootstrap.ManagedResourceBuilder;
 import io.quarkus.test.bootstrap.ServiceContext;
@@ -26,6 +27,7 @@ public class KafkaContainerManagedResourceBuilder implements ManagedResourceBuil
     private String kafkaConfigPath;
     private String serverProperties;
     private String[] kafkaConfigResources;
+    private String quarkusTlsRegistryConfigName = null;
 
     protected KafkaVendor getVendor() {
         return vendor;
@@ -90,6 +92,13 @@ public class KafkaContainerManagedResourceBuilder implements ManagedResourceBuil
         return registryImage;
     }
 
+    /**
+     * @return TLS config name or null if the registry is disabled
+     */
+    protected String getQuarkusTlsRegistryConfigName() {
+        return quarkusTlsRegistryConfigName;
+    }
+
     @Override
     public void init(Annotation annotation) {
         KafkaContainer metadata = (KafkaContainer) annotation;
@@ -103,6 +112,13 @@ public class KafkaContainerManagedResourceBuilder implements ManagedResourceBuil
         this.kafkaConfigPath = PropertiesUtils.resolveProperty(metadata.kafkaConfigPath());
         this.serverProperties = PropertiesUtils.resolveProperty(metadata.serverProperties());
         this.kafkaConfigResources = metadata.kafkaConfigResources();
+        if (metadata.tlsRegistryEnabled()) {
+            if (metadata.tlsConfigName().isEmpty()) {
+                throw new IllegalStateException(
+                        "Kafka client must be configured with named TLS config when TLS registry is enabled");
+            }
+            this.quarkusTlsRegistryConfigName = metadata.tlsConfigName();
+        }
     }
 
     @Override
@@ -115,7 +131,7 @@ public class KafkaContainerManagedResourceBuilder implements ManagedResourceBuil
         }
 
         if (vendor == KafkaVendor.STRIMZI) {
-            return new StrimziKafkaContainerManagedResource(this);
+            return new LocalhostManagedResource(new StrimziKafkaContainerManagedResource(this));
         }
 
         return new ConfluentKafkaContainerManagedResource(this);

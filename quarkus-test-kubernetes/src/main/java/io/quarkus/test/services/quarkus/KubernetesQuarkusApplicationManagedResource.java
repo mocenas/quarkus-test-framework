@@ -71,13 +71,9 @@ public abstract class KubernetesQuarkusApplicationManagedResource<T extends Quar
 
     @Override
     public URILike getURI(Protocol protocol) {
-        if (protocol == Protocol.HTTPS) {
-            fail("SSL is not supported for Kubernetes tests yet");
-        } else if (protocol == Protocol.GRPC) {
-            fail("gRPC is not supported for Kubernetes tests yet");
-        }
+        validateProtocol(protocol);
         return createURI(protocol.getValue(),
-                client.host(model.getContext().getOwner()),
+                client.host(),
                 client.port(model.getContext().getOwner()));
     }
 
@@ -87,7 +83,7 @@ public abstract class KubernetesQuarkusApplicationManagedResource<T extends Quar
             return false;
         }
 
-        return super.isRunning() && routeIsReachable(Protocol.HTTP);
+        return super.isRunning() && routeIsReachable();
     }
 
     @Override
@@ -98,7 +94,7 @@ public abstract class KubernetesQuarkusApplicationManagedResource<T extends Quar
     @Override
     public void restart() {
         stop();
-        if (model.containsBuildProperties()) {
+        if (model.buildPropertiesChanged()) {
             init = false;
             model.build();
         }
@@ -119,8 +115,8 @@ public abstract class KubernetesQuarkusApplicationManagedResource<T extends Quar
         }
     }
 
-    private boolean routeIsReachable(Protocol protocol) {
-        var uri = getURI(protocol);
+    private boolean routeIsReachable() {
+        var uri = getURI(Protocol.HTTP);
 
         return given().baseUri(uri.getRestAssuredStyleUri())
                 .basePath("/")

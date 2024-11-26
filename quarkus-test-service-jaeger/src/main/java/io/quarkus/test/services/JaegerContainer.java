@@ -11,7 +11,7 @@ import io.quarkus.test.services.containers.JaegerContainerManagedResourceBuilder
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface JaegerContainer {
-    String image() default "quay.io/jaegertracing/all-in-one:1.41.0";
+    String image() default "quay.io/jaegertracing/all-in-one:1.53.0";
 
     int tracePort() default 16686;
 
@@ -33,6 +33,11 @@ public @interface JaegerContainer {
     boolean useOtlpCollector() default true;
 
     String expectedLog() default "server started";
+
+    /**
+     * @return whether communication between Quarkus OTel exporter and Jaeger OTLP collector should be secured
+     */
+    boolean tls() default false;
 
     Class<? extends ManagedResourceBuilder> builder() default JaegerContainerManagedResourceBuilder.class;
 }

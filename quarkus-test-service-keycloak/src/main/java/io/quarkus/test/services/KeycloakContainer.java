@@ -14,13 +14,15 @@ import io.quarkus.test.services.containers.KeycloakContainerManagedResourceBuild
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface KeycloakContainer {
-    String image() default "quay.io/keycloak/keycloak:23.0";
+    String image() default "quay.io/keycloak/keycloak:25.0";
 
     int port() default 8080;
 
     String expectedLog() default "started in";
 
     String[] command() default {};
+
+    long memoryLimitMiB() default 1000;
 
     Class<? extends ManagedResourceBuilder> builder() default KeycloakContainerManagedResourceBuilder.class;
 }

@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.quarkus.qe</groupId>
     <artifactId>quarkus-test-parent</artifactId>
-    <version>1.4.1.Beta5-SNAPSHOT</version>
+    <version>1.6.0.Beta16-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Quarkus - Test Framework - Parent</name>
     <description>Quarkus QE Test Framework is a library enabling the developers to easily deploy multiple Quarkus applications across different platforms in a single test.</description>
@@ -29,24 +29,23 @@
     </scm>
     <url>https://github.com/quarkus-qe/quarkus-test-framework/</url>
     <properties>
-        <compiler-plugin.version>3.12.1</compiler-plugin.version>
-        <source-plugin.version>3.3.0</source-plugin.version>
-        <javadoc-plugin.version>3.6.3</javadoc-plugin.version>
+        <compiler-plugin.version>3.13.0</compiler-plugin.version>
+        <source-plugin.version>3.3.1</source-plugin.version>
+        <javadoc-plugin.version>3.11.1</javadoc-plugin.version>
         <maven.compiler.parameters>true</maven.compiler.parameters>
         <maven.compiler.release>17</maven.compiler.release>
         <maven.javadoc.failOnError>false</maven.javadoc.failOnError>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <surefire-plugin.version>3.2.3</surefire-plugin.version>
+        <surefire-plugin.version>3.5.2</surefire-plugin.version>
         <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
-        <jacoco-maven-plugin.version>0.8.11</jacoco-maven-plugin.version>
-        <prometheus.simpleclient_pushgateway.version>0.16.0</prometheus.simpleclient_pushgateway.version>
-        <maven-checkstyle-plugin.version>3.3.1</maven-checkstyle-plugin.version>
-        <formatter-maven-plugin.version>2.23.0</formatter-maven-plugin.version>
-        <impsort-maven-plugin.version>1.9.0</impsort-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
+        <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
+        <formatter-maven-plugin.version>2.24.1</formatter-maven-plugin.version>
+        <impsort-maven-plugin.version>1.12.0</impsort-maven-plugin.version>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus</quarkus.platform.group-id>
-        <quarkus.platform.version>3.6.4</quarkus.platform.version>
+        <quarkus.platform.version>3.17.0</quarkus.platform.version>
         <exclude.tests.with.tags>quarkus-cli</exclude.tests.with.tags>
         <include.tests>**/*IT.java</include.tests>
         <exclude.openshift.tests>**/OpenShift*IT.java</exclude.openshift.tests>
@@ -55,27 +54,32 @@
         <!-- Format Settings -->
         <src.format.goal>format</src.format.goal>
         <src.sort.goal>sort</src.sort.goal>
-        <checkstyle.version>10.12.0</checkstyle.version>
+        <checkstyle.version>10.20.1</checkstyle.version>
         <!-- Code Coverage Properties-->
         <jacoco.agent.argLine />
-        <playwright.version>1.40.0</playwright.version>
+        <playwright.version>1.48.0</playwright.version>
         <!-- Faster build when using -DskipTests -->
         <quarkus.build.skip>${skipTests}</quarkus.build.skip>
         <!-- Oracle image - we aim to use same version as Dev Services for Oracle so that we only download one image -->
         <oracle.image>docker.io/gvenzl/oracle-free:23-slim-faststart</oracle.image>
-        <postgresql.image>docker.io/postgres:16.1</postgresql.image>
-        <mysql.image>docker.io/mysql:8.2.0</mysql.image>
-        <infinispan.image>docker.io/infinispan/server:14.0</infinispan.image>
+        <postgresql.image>docker.io/postgres:16</postgresql.image>
+        <mysql.image>docker.io/mysql:8.4</mysql.image>
+        <strimzi.testcontainers.version>0.107.0</strimzi.testcontainers.version>
+        <infinispan.image>docker.io/infinispan/server:15.0</infinispan.image>
         <infinispan-legacy.image>docker.io/infinispan/server:13.0</infinispan-legacy.image>
+        <!-- TODO use official image if this fixed https://github.com/hashicorp/docker-consul/issues/184 -->
+        <consul.image>docker.io/bitnami/consul:1.19.1</consul.image>
+        <reruns>2</reruns>
+        <flaky-run-reporter.version>0.1.4</flaky-run-reporter.version>
     </properties>
     <distributionManagement>
         <snapshotRepository>
             <id>ossrh</id>
-            <url>https://oss.sonatype.org/content/repositories/snapshots/</url>
+            <url>https://s01.oss.sonatype.org/content/repositories/snapshots/</url>
         </snapshotRepository>
         <repository>
             <id>oss.sonatype</id>
-            <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
         </repository>
     </distributionManagement>
     <dependencyManagement>
@@ -86,6 +90,22 @@
                 <version>${quarkus.platform.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <dependency>
+                <!-- The import above brings older version of this dependency, so we need to override it manually -->
+                <groupId>io.strimzi</groupId>
+                <artifactId>strimzi-test-container</artifactId>
+                <version>${strimzi.testcontainers.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.apache.logging.log4j</groupId>
+                        <artifactId>log4j-core</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.apache.logging.log4j</groupId>
+                        <artifactId>log4j-api</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <dependency>
                 <groupId>io.quarkus.qe</groupId>
@@ -100,11 +120,6 @@
             <dependency>
                 <groupId>io.quarkus.qe</groupId>
                 <artifactId>quarkus-test-cli</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.quarkus.qe</groupId>
-                <artifactId>quarkus-test-helm</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -178,11 +193,6 @@
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.prometheus</groupId>
-                <artifactId>simpleclient_pushgateway</artifactId>
-                <version>${prometheus.simpleclient_pushgateway.version}</version>
-            </dependency>
-            <dependency>
                 <groupId>com.microsoft.playwright</groupId>
                 <artifactId>playwright</artifactId>
                 <!-- TODO: upstream is also considering using of 'playwright', use managed version if that happens -->
@@ -218,6 +228,14 @@
         </dependency>
     </dependencies>
     <build>
+        <extensions>
+            <!--Creates report about detected flaky tests during SureFire and FailSafe test runs -->
+            <extension>
+                <groupId>io.quarkus.qe</groupId>
+                <artifactId>flaky-run-reporter</artifactId>
+                <version>${flaky-run-reporter.version}</version>
+            </extension>
+        </extensions>
         <pluginManagement>
             <plugins>
                 <plugin>
@@ -226,6 +244,7 @@
                     <configuration>
                         <!-- fixes unavailable native binary build logs, https://github.com/quarkus-qe/quarkus-test-framework/issues/785 -->
                         <forkNode implementation="org.apache.maven.plugin.surefire.extensions.SurefireForkNodeFactory" />
+                        <rerunFailingTestsCount>${reruns}</rerunFailingTestsCount>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -245,6 +264,11 @@
                     <groupId>org.jacoco</groupId>
                     <artifactId>jacoco-maven-plugin</artifactId>
                     <version>${jacoco-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>io.quarkus.qe</groupId>
+                    <artifactId>quarkus-test-preparer</artifactId>
+                    <version>${project.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
@@ -315,7 +339,6 @@
                 <version>${maven-checkstyle-plugin.version}</version>
                 <configuration>
                     <configLocation>checkstyle.xml</configLocation>
-                    <encoding>UTF-8</encoding>
                     <consoleOutput>true</consoleOutput>
                     <failsOnError>true</failsOnError>
                     <linkXRef>true</linkXRef>
@@ -346,13 +369,14 @@
                             <goal>verify</goal>
                         </goals>
                         <configuration>
-                            <systemProperties>
+                            <systemPropertyVariables>
                                 <oracle.image>${oracle.image}</oracle.image>
                                 <postgresql.image>${postgresql.image}</postgresql.image>
                                 <mysql.image>${mysql.image}</mysql.image>
                                 <infinispan.image>${infinispan.image}</infinispan.image>
                                 <infinispan-legacy.image>${infinispan-legacy.image}</infinispan-legacy.image>
-                            </systemProperties>
+                                <consul.image>${consul.image}</consul.image>
+                            </systemPropertyVariables>
                             <argLine>${jacoco.agent.argLine}</argLine>
                             <excludedGroups>${exclude.tests.with.tags}</excludedGroups>
                             <includes>
@@ -372,6 +396,11 @@
             </plugin>
         </plugins>
     </build>
+
+    <modules>
+        <module>plugins/test-preparer</module>
+    </modules>
+
     <profiles>
         <profile>
             <id>framework</id>
@@ -381,7 +410,6 @@
             <modules>
                 <module>quarkus-test-core</module>
                 <module>quarkus-test-cli</module>
-                <module>quarkus-test-helm</module>
                 <module>quarkus-test-containers</module>
                 <module>quarkus-test-images</module>
                 <module>quarkus-test-kubernetes</module>
@@ -407,16 +435,6 @@
             </modules>
         </profile>
         <profile>
-            <id>extensions</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <modules>
-                <module>extensions/tracing</module>
-                <module>extensions/metrics</module>
-            </modules>
-        </profile>
-        <profile>
             <id>native</id>
             <activation>
                 <property>
@@ -430,12 +448,12 @@
                         <executions>
                             <execution>
                                 <configuration>
-                                    <systemProperties>
+                                    <systemPropertyVariables>
+                                        <quarkus.native.enabled>${quarkus.native.enabled}</quarkus.native.enabled>
                                         <native.image.path>${project.build.directory}/${project.build.finalName}-runner</native.image.path>
-                                        <quarkus.package.type>${quarkus.package.type}</quarkus.package.type>
                                         <quarkus.native.container-build>${quarkus.native.container-build}</quarkus.native.container-build>
                                         <quarkus.native.native-image-xmx>${quarkus.native.native-image-xmx}</quarkus.native.native-image-xmx>
-                                    </systemProperties>
+                                    </systemPropertyVariables>
                                 </configuration>
                             </execution>
                         </executions>
@@ -443,7 +461,7 @@
                 </plugins>
             </build>
             <properties>
-                <quarkus.package.type>native</quarkus.package.type>
+                <quarkus.native.enabled>true</quarkus.native.enabled>
                 <quarkus.native.container-build>true</quarkus.native.container-build>
                 <quarkus.native.native-image-xmx>5g</quarkus.native.native-image-xmx>
                 <exclude.quarkus.devmode.tests>**/*DevMode*IT.java</exclude.quarkus.devmode.tests>
@@ -462,6 +480,23 @@
                 <include.tests>**/OpenShift*IT.java</include.tests>
                 <exclude.openshift.tests>no</exclude.openshift.tests>
             </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <configuration>
+                                    <systemPropertyVariables>
+                                        <!-- always set 'OpenShift' property as that's how detect OpenShift tests inside FW -->
+                                        <openshift>true</openshift>
+                                    </systemPropertyVariables>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
         <profile>
             <!-- You need to be connected to a Kubernetes instance to activate 
@@ -476,6 +511,23 @@
                 <include.tests>**/Kubernetes*IT.java</include.tests>
                 <exclude.kubernetes.tests>no</exclude.kubernetes.tests>
             </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <configuration>
+                                    <systemPropertyVariables>
+                                        <!-- always set 'Kubernetes' property as that's how detect Kubernetes tests inside FW -->
+                                        <kubernetes>true</kubernetes>
+                                    </systemPropertyVariables>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
         <profile>
             <id>validate-format</id>
@@ -526,6 +578,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-release-plugin</artifactId>
+                        <version>3.1.1</version>
                         <configuration>
                             <autoVersionSubmodules>true</autoVersionSubmodules>
                             <tagNameFormat>@{project.version}</tagNameFormat>
@@ -538,6 +591,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
                         <configuration>
                             <gpgArguments>
                                 <arg>--pinentry-mode</arg>
@@ -555,7 +609,9 @@
                         </executions>
                     </plugin>
                     <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.1</version>
                         <executions>
                             <execution>
                                 <phase>package</phase>
@@ -568,7 +624,7 @@
                     <plugin>
                         <groupId>org.sonatype.plugins</groupId>
                         <artifactId>nexus-staging-maven-plugin</artifactId>
-                        <version>1.6.13</version>
+                        <version>1.7.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <nexusUrl>https://s01.oss.sonatype.org/</nexusUrl>

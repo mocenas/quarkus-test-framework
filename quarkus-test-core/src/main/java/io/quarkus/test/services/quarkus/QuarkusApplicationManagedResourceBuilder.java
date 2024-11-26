@@ -1,6 +1,9 @@
 package io.quarkus.test.services.quarkus;
 
+import static io.quarkus.test.security.certificate.ServingCertificateConfig.SERVING_CERTIFICATE_KEY;
 import static io.quarkus.test.utils.PropertiesUtils.resolveProperty;
+import static io.quarkus.test.utils.TestExecutionProperties.isKubernetesPlatform;
+import static io.quarkus.test.utils.TestExecutionProperties.isOpenshiftPlatform;
 import static java.util.stream.Collectors.toSet;
 
 import java.io.File;
@@ -8,28 +11,32 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
 
-import io.quarkus.bootstrap.model.AppArtifact;
-import io.quarkus.bootstrap.model.AppDependency;
-import io.quarkus.builder.Version;
+import io.quarkus.deployment.configuration.BuildTimeConfigurationReader;
+import io.quarkus.runtime.LaunchMode;
 import io.quarkus.test.bootstrap.ManagedResourceBuilder;
 import io.quarkus.test.bootstrap.ServiceContext;
+import io.quarkus.test.security.certificate.CertificateBuilder;
 import io.quarkus.test.services.Dependency;
-import io.quarkus.test.services.quarkus.model.QuarkusProperties;
 import io.quarkus.test.utils.ClassPathUtils;
 import io.quarkus.test.utils.FileUtils;
 import io.quarkus.test.utils.MapUtils;
 import io.quarkus.test.utils.PropertiesUtils;
+import io.quarkus.test.utils.TestExecutionProperties;
+import io.smallrye.config.SecretKeys;
 
 public abstract class QuarkusApplicationManagedResourceBuilder implements ManagedResourceBuilder {
 
@@ -41,22 +48,26 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
 
     protected static final Path RESOURCES_FOLDER = Paths.get("src", "main", "resources");
 
-    private static final String BUILD_TIME_PROPERTIES = "/build-time-list";
     private static final Path TEST_RESOURCES_FOLDER = Paths.get("src", "test", "resources");
     private static final String APPLICATION_PROPERTIES = "application.properties";
-    private static final Set<String> BUILD_PROPERTIES = FileUtils.loadFile(BUILD_TIME_PROPERTIES).lines().collect(toSet());
-    private static final String DEPENDENCY_SCOPE_DEFAULT = "compile";
     private static final String QUARKUS_GROUP_ID_DEFAULT = "io.quarkus";
-    private static final int DEPENDENCY_DIRECT_FLAG = 0b000010;
 
     private Class<?>[] appClasses;
-    private List<AppDependency> forcedDependencies = Collections.emptyList();
+    /**
+     * Whether build consist of all source classes or only some of them.
+     */
+    private boolean buildWithAllClasses = true;
+    private List<io.quarkus.test.services.quarkus.Dependency> forcedDependencies = Collections.emptyList();
     private boolean requiresCustomBuild = false;
     private ServiceContext context;
     private String propertiesFile = APPLICATION_PROPERTIES;
     private boolean sslEnabled = false;
     private boolean grpcEnabled = false;
     private Map<String, String> propertiesSnapshot;
+    private CertificateBuilder certificateBuilder;
+    private Set<String> detectedBuildTimeProperties;
+    private boolean needsEnhancedApplicationProperties = false;
+    private boolean s2iScenario = false;
 
     protected abstract void build();
 
@@ -92,12 +103,20 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
         return appClasses;
     }
 
-    protected List<AppDependency> getForcedDependencies() {
+    protected boolean isBuildWithAllClasses() {
+        return buildWithAllClasses;
+    }
+
+    protected List<io.quarkus.test.services.quarkus.Dependency> getForcedDependencies() {
         return forcedDependencies;
     }
 
     protected boolean requiresCustomBuild() {
         return requiresCustomBuild;
+    }
+
+    protected void setCustomBuildRequired() {
+        this.requiresCustomBuild = true;
     }
 
     @Override
@@ -117,7 +136,7 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
                 .orElseGet(() -> computedProperties.get(propertyWithProfile(name)));
     }
 
-    public boolean containsBuildProperties() {
+    public boolean buildPropertiesChanged() {
         Map<String, String> differenceProperties = MapUtils.difference(context.getOwner().getProperties(), propertiesSnapshot);
         Set<String> properties = differenceProperties.keySet();
         if (properties.isEmpty()) {
@@ -127,9 +146,32 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
         return properties.stream().anyMatch(this::isBuildProperty);
     }
 
+    public boolean containsBuildProperties() {
+        if (propertiesSnapshot == null) {
+            return false;
+        }
+        return propertiesSnapshot.keySet().stream().anyMatch(this::isBuildProperty);
+    }
+
+    /**
+     * Creates snapshot of build properties if it doesn't exist and determines whether custom build is required
+     * due to build-time properties in native mode.
+     */
+    public void createSnapshotOfBuildPropertiesIfNotExists() {
+        if (propertiesSnapshot == null) {
+            createSnapshotOfBuildProperties();
+        }
+    }
+
     public Map<String, String> createSnapshotOfBuildProperties() {
         propertiesSnapshot = new HashMap<>(context.getOwner().getProperties());
-        return new HashMap<>(context.getOwner().getProperties());
+
+        // if there are build-time properties, custom build is required
+        if (!requiresCustomBuild) {
+            requiresCustomBuild = containsBuildProperties();
+        }
+
+        return propertiesSnapshot;
     }
 
     public Map<String, String> getBuildProperties() {
@@ -156,7 +198,13 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
         if (appClasses == null || appClasses.length == 0) {
             appClasses = ClassPathUtils.findAllClassesFromSource();
             requiresCustomBuild = false;
+        } else {
+            buildWithAllClasses = false;
         }
+    }
+
+    protected void setS2iScenario() {
+        this.s2iScenario = true;
     }
 
     public void initForcedDependencies(Dependency[] forcedDependencies) {
@@ -164,15 +212,38 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
             requiresCustomBuild = true;
             this.forcedDependencies = Stream.of(forcedDependencies).map(d -> {
                 String groupId = StringUtils.defaultIfEmpty(resolveProperty(d.groupId()), QUARKUS_GROUP_ID_DEFAULT);
-                String version = StringUtils.defaultIfEmpty(resolveProperty(d.version()), Version.getVersion());
-                AppArtifact artifact = new AppArtifact(groupId, d.artifactId(), version);
-                return new AppDependency(artifact, DEPENDENCY_SCOPE_DEFAULT, DEPENDENCY_DIRECT_FLAG);
+                return new io.quarkus.test.services.quarkus.Dependency(groupId, d.artifactId(), getVersion(d));
             }).collect(Collectors.toList());
         }
     }
 
+    private static String getVersion(Dependency dependency) {
+        if (dependency.version() == null || dependency.version().isEmpty()) {
+            return null;
+        }
+        return resolveProperty(dependency.version());
+    }
+
     protected void configureLogging() {
         context.getOwner().withProperty("quarkus.log.console.format", "%d{HH:mm:ss,SSS} %s%e%n");
+    }
+
+    protected void configureCertificates() {
+        if (certificateBuilder != null) {
+            getContext().put(CertificateBuilder.INSTANCE_KEY, certificateBuilder);
+            certificateBuilder
+                    .certificates()
+                    .forEach(certificate -> certificate
+                            .configProperties()
+                            .forEach((k, v) -> getContext().withTestScopeConfigProperty(k, v)));
+            if (certificateBuilder.servingCertificateConfig() != null) {
+                getContext().put(SERVING_CERTIFICATE_KEY, certificateBuilder.servingCertificateConfig());
+            }
+        }
+    }
+
+    protected void setCertificateBuilder(CertificateBuilder certificateBuilder) {
+        this.certificateBuilder = certificateBuilder;
     }
 
     protected void copyResourcesToAppFolder() {
@@ -194,28 +265,108 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
     }
 
     private void createComputedApplicationProperties() {
+        // this needs systematic change so that users understand what will end-up as application property and
+        // what will end-up as system property
         Path sourceApplicationProperties = getResourcesApplicationFolder().resolve(propertiesFile);
         Path generatedApplicationProperties = getResourcesApplicationFolder().resolve(APPLICATION_PROPERTIES);
         Map<String, String> map = new HashMap<>();
         // Add the content of the source application properties into the auto-generated application.properties
         if (Files.exists(sourceApplicationProperties)) {
-            map.putAll(PropertiesUtils.toMap(sourceApplicationProperties));
+            var sourceAppPropsMap = PropertiesUtils.toMap(sourceApplicationProperties);
+            if (!propertiesFile.equalsIgnoreCase(APPLICATION_PROPERTIES) && !sourceAppPropsMap.isEmpty()) {
+                needsEnhancedApplicationProperties = true;
+            }
+            map.putAll(sourceAppPropsMap);
         }
 
         // Then add the service properties
-        map.putAll(context.getOwner().getProperties());
+        var svcContextProperties = context.getOwner().getProperties();
+
+        var allProperties = new HashMap<>(map);
+        allProperties.putAll(svcContextProperties);
+        // detect build time properties in computed properties, service properties and other config sources
+        detectBuildTimeProperties(allProperties);
+
+        svcContextProperties.forEach((k, v) -> {
+            // this needs rework, but it seems we consider as runtime properties everything added with 'withProperty'
+            // unless it is detected as build property
+            // we always include all the properties into application.properties in OCP and K8 because we can't rely on
+            // system properties there
+            if (isBuildProperty(k) || isOpenshiftPlatform() || isKubernetesPlatform()) {
+                if (!needsEnhancedApplicationProperties) {
+                    needsEnhancedApplicationProperties = true;
+                }
+                map.put(k, v);
+            }
+        });
         // Then overwrite the application properties with the generated application.properties
         PropertiesUtils.fromMap(map, generatedApplicationProperties);
     }
 
-    private boolean isBuildProperty(String name) {
-        return BUILD_PROPERTIES.stream().anyMatch(
-                build -> name.matches(build) // It's a regular expression
-                        || (build.endsWith(".") && name.startsWith(build)) // contains with
-                        || name.equals(build)); // or it's equal to
+    protected void detectBuildTimeProperties(Map<String, String> computedProperties) {
+        // this won't detect build-time properties for dependencies forced with @Dependency as they are not
+        // on the classpath which doesn't matter because custom build is always required when any dependency is forced
+        var classLoader = Thread.currentThread().getContextClassLoader();
+
+        try {
+            var buildTimeConfigReader = new BuildTimeConfigurationReader(classLoader);
+            var buildSystemProps = new Properties();
+            buildSystemProps.putAll(computedProperties);
+
+            // this must always be set as Quarkus sets and config expansions would fail
+            buildSystemProps.put("platform.quarkus.native.builder-image", "<<ignored>>");
+
+            var config = buildTimeConfigReader.initConfiguration(LaunchMode.NORMAL, buildSystemProps, new Properties(),
+                    Map.of());
+            var readResult = buildTimeConfigReader.readConfiguration(config);
+            var buildTimeConfigKeys = new HashSet<String>();
+            buildTimeConfigKeys.addAll(readResult.getAllBuildTimeValues().keySet());
+            buildTimeConfigKeys.addAll(readResult.getBuildTimeRunTimeValues().keySet());
+
+            // gather build-time config keys from extensions deployment modules
+            // this won't work for named config keys (without regex), but we can tweak that in the future if we need to
+            var deploymentBuildProps = Arrays
+                    .stream(FileUtils
+                            .loadFile("/deployment-build-props.txt")
+                            .split(System.lineSeparator()))
+                    .map(String::trim)
+                    .collect(toSet());
+            buildTimeConfigKeys.addAll(deploymentBuildProps);
+
+            // handle relocations - if relocation processor is applied, we won't find original config property
+            // in the build-time or build-time-runtime-fixed properties as we can only find there the relocated one;
+            // we can safely guess that secret keys are not build-time config props,
+            // but we don't create config ourselves, hence unlock keys to avoid build failures
+            var relocatedBuildTimeProps = SecretKeys.doUnlocked(() -> buildSystemProps
+                    .stringPropertyNames()
+                    .stream()
+                    .filter(p -> !buildTimeConfigKeys.contains(p))
+                    .filter(p -> !p.equals(config.getConfigValue(p).getName()))
+                    .filter(p -> buildTimeConfigKeys.contains(config.getConfigValue(p).getName()))
+                    .collect(toSet()));
+            buildTimeConfigKeys.addAll(relocatedBuildTimeProps);
+
+            this.detectedBuildTimeProperties = Set.copyOf(buildTimeConfigKeys);
+        } catch (IOException | ClassNotFoundException e) {
+            throw new RuntimeException("Failed to detect build time properties", e);
+        }
     }
 
-    private void copyResourcesInFolderToAppFolder(Path folder) {
+    private Set<String> getDetectedBuildTimeProperties() {
+        if (detectedBuildTimeProperties == null) {
+            throw new IllegalStateException("""
+                    Build time configuration properties are not initialized yet.
+                    This must mean there is a race in the Test Framework design and we need to fix it.
+                    """);
+        }
+        return detectedBuildTimeProperties;
+    }
+
+    private boolean isBuildProperty(String name) {
+        return getDetectedBuildTimeProperties().contains(name);
+    }
+
+    protected void copyResourcesInFolderToAppFolder(Path folder) {
         try (Stream<Path> binariesFound = Files
                 .find(folder, Integer.MAX_VALUE,
                         (path, basicFileAttributes) -> !Files.isDirectory(path))) {
@@ -242,14 +393,6 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
         return "%" + context.getScenarioContext().getRunningTestClassName() + "." + name;
     }
 
-    private boolean isQuarkusVersion2Dot3OrAbove() {
-        String quarkusVersion = QuarkusProperties.getVersion();
-        return !quarkusVersion.startsWith("2.2.")
-                && !quarkusVersion.startsWith("2.1.")
-                && !quarkusVersion.startsWith("2.0.")
-                && !quarkusVersion.startsWith("1.");
-    }
-
     public boolean useSeparateManagementInterface() {
         return getContext().getOwner().getProperty("quarkus.management.enabled")
                 .map("true"::equals)
@@ -264,7 +407,7 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
     }
 
     public boolean useManagementSsl() {
-        return getContext().getOwner().getProperty("quarkus.management.ssl.certificate.key-store-file").isPresent();
+        return TestExecutionProperties.useManagementSsl(getContext().getOwner());
     }
 
     public int getHttpPort() {
@@ -274,5 +417,13 @@ public abstract class QuarkusApplicationManagedResourceBuilder implements Manage
     private Optional<Integer> getPort(String property) {
         return getContext().getOwner().getProperty(property)
                 .map(Integer::parseInt);
+    }
+
+    protected boolean areApplicationPropertiesEnhanced() {
+        return needsEnhancedApplicationProperties;
+    }
+
+    protected boolean isS2iScenario() {
+        return s2iScenario;
     }
 }
