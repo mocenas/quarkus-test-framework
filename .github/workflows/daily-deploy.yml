@@ -24,10 +24,10 @@ jobs:
 #          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
 #          gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
-      - name: Configure Git author
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+#      - name: Configure Git author
+#        run: |
+#          git config --local user.email "action@github.com"
+#          git config --local user.name "GitHub Action"
 
       - name: Maven release 999-SNAPSHOT
         run: |
