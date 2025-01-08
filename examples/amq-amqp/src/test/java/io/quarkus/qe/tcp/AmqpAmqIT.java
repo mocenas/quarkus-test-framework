@@ -43,7 +43,7 @@ public class AmqpAmqIT {
     public void testLastPrice() {
         await().pollInterval(1, TimeUnit.SECONDS)
                 .atMost(30, TimeUnit.SECONDS).untilAsserted(() -> {
-                    String response = app.given().get("/price")
+                    String response = app.given().get("/priceWTf")
                             .then().statusCode(HttpStatus.SC_OK).extract().asString();
                     assertTrue(EXPECTED_PRICES.stream().anyMatch(response::contains),
                             "Expected prices not found in " + response);
