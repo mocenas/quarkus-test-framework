@@ -138,6 +138,7 @@ When creating new branch please ensure following items:
  - Pin external application branches, see for example https://github.com/quarkus-qe/quarkus-test-framework/pull/905
  - Pin CLI to concrete stream, see for example https://github.com/quarkus-qe/quarkus-test-framework/pull/918
  - Update GH Actions to use the right Quarkus branch, see for example https://github.com/quarkus-qe/quarkus-test-framework/pull/920
+ - Change quarkus.platform.version property in parent pom.xml to use specific quarkus version, not snapshot
 
 ## The small print
 
