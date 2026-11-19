@@ -8,9 +8,9 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Stream;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 public class ExtractBuildTimeProperties {
 
@@ -30,7 +30,7 @@ public class ExtractBuildTimeProperties {
                         String fullPath = p.toString().replace('\\', '/');
                         return fullPath.contains("/target/")
                                 && (fileName.equals("quarkus-config-model.yaml")
-                                        || fileName.equals("quarkus-config-model.json"));
+                                || fileName.equals("quarkus-config-model.json"));
                     })
                     .toList();
 
@@ -61,9 +61,9 @@ public class ExtractBuildTimeProperties {
             JsonNode phaseNode = node.has("phase") ? node.get("phase") : node.get("configPhase");
             JsonNode pathNode = node.has("path") ? node.get("path") : node.get("name");
 
-            if (phaseNode != null && "BUILD_TIME".equals(phaseNode.asString()) && pathNode != null) {
-                if (pathNode.has("property") && pathNode.get("property").isString()) {
-                    String propKey = pathNode.get("property").asString().trim();
+            if (phaseNode != null && "BUILD_TIME".equals(phaseNode.asText()) && pathNode != null) {
+                if (pathNode.has("property") && pathNode.get("property").isTextual()) {
+                    String propKey = pathNode.get("property").asText().trim();
                     if (propKey.startsWith("quarkus.")) {
                         results.add(propKey);
                     }
