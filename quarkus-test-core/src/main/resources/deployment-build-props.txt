@@ -339,6 +339,8 @@ quarkus.hibernate-orm.statistics
 quarkus.hibernate-orm.validate-in-dev-mode
 quarkus.hibernate-orm.validation.ddl-influence
 quarkus.hibernate-orm.validation.mode
+quarkus.http.rate-limit.metrics.enabled
+quarkus.http.rate-limit.redis.client-name
 quarkus.http.test-timeout
 quarkus.http3.alt-svc
 quarkus.http3.alt-svc-max-age
@@ -1233,6 +1235,7 @@ quarkus.observability.enabled-in-tests
 quarkus.observability.lgtm.enable-obi
 quarkus.observability.lgtm.enabled
 quarkus.observability.lgtm.force-scraping
+quarkus.observability.lgtm.gcx-file-path
 quarkus.observability.lgtm.grafana-home-dashboard-path
 quarkus.observability.lgtm.grafana-plugins-preinstall
 quarkus.observability.lgtm.grafana-port
@@ -1735,6 +1738,7 @@ quarkus.rest-client.provider-autodiscovery
 quarkus.rest-client.removes-trailing-slash
 quarkus.rest-client.scope
 quarkus.rest-csrf.enabled
+quarkus.rest.blocking.signatures.execution.mode
 quarkus.rest.jackson.optimization.enable-reflection-free-serializers
 quarkus.rest.path
 quarkus.resteasy-client-oidc-token-propagation.enabled
