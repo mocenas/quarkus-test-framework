@@ -156,8 +156,6 @@ quarkus.debug.generated-sources-dir
 quarkus.debug.reflection
 quarkus.debug.transformed-classes-dir
 quarkus.deploy.target
-quarkus.dev-mcp.cors.enabled
-quarkus.dev-mcp.hosts
 quarkus.dev-ui.allow-extension-management
 quarkus.dev-ui.base-theme
 quarkus.dev-ui.context-root
@@ -339,9 +337,6 @@ quarkus.hibernate-orm.validate-in-dev-mode
 quarkus.hibernate-orm.validation.enabled
 quarkus.hibernate-orm.validation.mode
 quarkus.http.test-timeout
-quarkus.http3.alt-svc
-quarkus.http3.alt-svc-max-age
-quarkus.http3.enabled
 quarkus.ide.target
 quarkus.index-dependency."dependency-name".artifact-id
 quarkus.index-dependency."dependency-name".classifier
@@ -1810,10 +1805,6 @@ quarkus.snapstart.full-warmup
 quarkus.snapstart.generate-application-class-list
 quarkus.snapstart.initialize-classes
 quarkus.snapstart.preload-classes
-quarkus.spiffe-client.devservices.enabled
-quarkus.spiffe-client.devservices.http-port
-quarkus.spiffe-client.devservices.transport
-quarkus.spiffe-client.enabled
 quarkus.spring-boot-properties.configuration-properties-naming-strategy
 quarkus.spring-di.enabled
 quarkus.ssl.native
